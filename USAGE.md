@@ -10,6 +10,8 @@ Stopping night mode cancels the sleep-light timer, not scheduled sunrise alarms 
 
 Night-mode actions require a fresh, non-retained bedtime reply with the requested state and duration, even when the cached timer state already matches. Listening starts before publishing, so a reply arriving before the broker acknowledgment is not missed; unrelated telemetry cannot falsely confirm a timer command. A lost broker connection cancels pending confirmation, and overlapping night-mode actions are rejected rather than attributing one uncorrelated reply to multiple commands.
 
+A confirmation timeout also cancels its pending SDK command, including one waiting for initial telemetry or broker acknowledgment, so the action cannot silently send a delayed night-mode command after reporting failure. Cancellation cannot undo an action the box has already processed.
+
 ## Playback and automations
 
 The device supports play/pause, next/previous chapter, seek, volume, volume steps, speaker volume limits, light-ring brightness, and immediate sleep. Volume percentages map to the box's 14 discrete levels; volume limits are separate from current volume. Homey chapter numbers start at 1.

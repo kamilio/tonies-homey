@@ -298,7 +298,7 @@ test("night-mode toggle and Flow controls send native timer commands and reject 
   await device.onUninit();
 });
 
-test("bundled SDK confirms Homey night duration and cancels on broker loss", async context => {
+test("bundled SDK confirms Homey night duration and cancels interrupted or timed-out controls", async context => {
   const { device, account, values, errors } = await fixture({ initialize: false });
   const { TonieCloudClient, ToniesRealtime } = require("../lib/tonies-sdk");
   const cloud = new TonieCloudClient({
@@ -342,6 +342,17 @@ test("bundled SDK confirms Homey night duration and cancels on broker loss", asy
   socket.emit("close");
   await stopped;
   await device.pending;
+  assert.equal(values.get("night_mode"), null);
+  await realtime.disconnect();
+  socket.connected = true;
+  await realtime.connect([{ ...box, macAddress: "aabbccddeeff" }]);
+  const withConfirmation = realtime.withConfirmation.bind(realtime);
+  realtime.withConfirmation = (...args) => withConfirmation(...args, 5);
+  const publishedBeforeTimeout = socket.published.length;
+  await assert.rejects(device.nightModeOn({ minutes: 30 }), { name: "AbortError" });
+  send("online-state", { onlineState: "connected" }, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(socket.published.length, publishedBeforeTimeout);
   assert.equal(values.get("night_mode"), null);
   assert.deepEqual(errors, []);
 });
