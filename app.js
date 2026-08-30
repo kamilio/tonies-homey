@@ -5,6 +5,8 @@ const Homey = require("homey");
 const { actions, conditions } = require("./lib/definitions");
 
 class ToniesApp extends Homey.App {
+  clients = new Map();
+
   async onInit() {
     this.accounts = new Map();
     this.connecting = new Map();
@@ -32,18 +34,18 @@ class ToniesApp extends Homey.App {
     assert(accountId, "The Tonies account has no identity");
     const boxes = (await cloud.listTonieboxes()).filter(isToniebox2);
     assert(boxes.length, "No Toniebox 2 devices were found; original Tonieboxes and Toniebox Lite are not supported");
-    this.homey.settings.set(`tonies.auth.${accountId}`, cloud.auth);
-    const existing = this.accounts.get(accountId);
-    if (existing) {
-      const account = await existing;
-      account.cloud.auth = cloud.auth;
-      account.cloud.emit("auth", cloud.auth);
-    }
+    const existing = this.clients.get(accountId);
+    if (existing) await existing.setAuth(cloud.auth);
+    else this.homey.settings.set(`tonies.auth.${accountId}`, cloud.auth);
     return { accountId, boxes };
   }
 
-  async getAccount(accountId) {
-    if (this.accounts.has(accountId)) return this.accounts.get(accountId);
+  async getAccount(accountId, device) {
+    if (this.accounts.has(accountId)) {
+      const account = this.accounts.get(accountId);
+      if (device) account.devices.add(device);
+      return account;
+    }
     if (!this.connecting.has(accountId)) {
       const connection = this.createAccount(accountId).then(account => {
         this.accounts.set(accountId, account);
@@ -51,17 +53,21 @@ class ToniesApp extends Homey.App {
       }).finally(() => this.connecting.delete(accountId));
       this.connecting.set(accountId, connection);
     }
-    return this.connecting.get(accountId);
+    const account = await this.connecting.get(accountId);
+    if (device) account.devices.add(device);
+    return account;
   }
 
   async createAccount(accountId) {
     const { TonieCloudClient, ToniesRealtime, isToniebox2 } = await this.sdk();
     const auth = this.homey.settings.get(`tonies.auth.${accountId}`);
     assert(auth?.refreshToken, "Repair this device to sign in to Tonies again");
-    const cloud = new TonieCloudClient({ auth, onAuth: next => this.homey.settings.set(`tonies.auth.${accountId}`, next) });
-    const boxes = (await cloud.listTonieboxes()).filter(isToniebox2);
+    const cloud = new TonieCloudClient({ auth, onAuth: next => {
+      if (this.clients.get(accountId) === cloud) this.homey.settings.set(`tonies.auth.${accountId}`, next);
+    } });
+    this.clients.set(accountId, cloud);
     const realtime = new ToniesRealtime(cloud);
-    const account = { cloud, realtime, boxes, devices: new Set() };
+    const account = { cloud, realtime, boxes: [], devices: new Set() };
     realtime.on("error", error => {
       for (const device of account.devices) device.setUnavailable(error.message);
     });
@@ -70,23 +76,27 @@ class ToniesApp extends Homey.App {
     });
     let connected = false;
     try {
-      await realtime.connect(boxes);
+      account.boxes = (await cloud.listTonieboxes()).filter(isToniebox2);
+      realtime.setMaxListeners(Math.max(10, account.boxes.length * 2 + 8));
+      await realtime.connect(account.boxes);
       connected = true;
       return account;
     } finally {
-      if (!connected) await realtime.disconnect();
+      if (!connected) {
+        if (this.clients.get(accountId) === cloud) this.clients.delete(accountId);
+        await realtime.disconnect();
+      }
     }
   }
 
   async releaseAccount(accountId, device, deleted = false) {
-    const pending = this.accounts.get(accountId);
-    if (!pending) return;
-    const account = await pending;
-    account.devices.delete(device);
+    const account = this.accounts.get(accountId);
+    if (!account?.devices.delete(device)) return;
     if (account.devices.size) return;
-    await account.realtime.disconnect();
     this.accounts.delete(accountId);
+    if (this.clients.get(accountId) === account.cloud) this.clients.delete(accountId);
     if (deleted) this.homey.settings.unset(`tonies.auth.${accountId}`);
+    await account.realtime.disconnect();
   }
 }
 

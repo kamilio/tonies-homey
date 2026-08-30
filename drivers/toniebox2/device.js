@@ -5,18 +5,39 @@ const Homey = require("homey");
 
 class TonieboxDevice extends Homey.Device {
   async onInit() {
+    if (this.stopping) await this.stopping;
+    assert(!this.initializing && this.closed !== false, "Toniebox is already initialized");
     this.closed = false;
+    this.initializing = this.initialize();
+    let initialized = false;
+    try {
+      await this.initializing;
+      initialized = true;
+    } finally {
+      this.initializing = undefined;
+      if (!initialized) await this.onUninit();
+    }
+  }
+
+  async initialize() {
+    this.lifecycle = {};
+    this.online = undefined;
+    this.metadataCache = new Map();
+    this.metadataTarget = undefined;
     this.accountId = this.getStoreValue("accountId");
-    this.account = await this.homey.app.getAccount(this.accountId);
+    this.account = await this.homey.app.getAccount(this.accountId, this);
+    if (this.closed) return;
     this.box = this.account.boxes.find(box => box.id === this.getData().id);
     assert(this.box?.product === "tb2" && this.box.generation === "tng", "This is not a Toniebox 2");
     this.account.devices.add(this);
     this.sdk = await this.homey.app.sdk();
-    this.pending = Promise.resolve();
-    this.stateListener = event => {
-      if (event.boxId === this.box.id && !this.closed) this.pending = this.pending.then(() => this.updateState(event));
-    };
+    if (this.closed) return;
+    this.stateEvents = [];
+    this.pending = undefined;
+    this.stateListener = event => event.boxId === this.box.id ? this.queueState(event) : undefined;
+    this.metadataListener = event => event.boxId === this.box.id ? this.queueMetadata(event.state) : undefined;
     this.account.realtime.on("state", this.stateListener);
+    this.account.realtime.on("state", this.metadataListener);
     this.registerCapabilityListener("night_mode", enabled => enabled ? this.nightModeOn({ minutes: this.getSetting("night_minutes") ?? 30 }) : this.nightModeOff());
     this.registerCapabilityListener("speaker_playing", playing => playing ? this.play() : this.pause());
     this.registerCapabilityListener("speaker_next", () => this.next());
@@ -26,77 +47,169 @@ class TonieboxDevice extends Homey.Device {
     this.registerCapabilityListener("volume_down", () => this.volumeDown());
     this.registerCapabilityListener("ring_brightness", brightness => this.setRingBrightness({ brightness }));
     await this.refresh();
+    if (this.closed) return;
     const state = this.account.realtime.states.get(this.box.id);
-    if (state) await this.updateState({ boxId: this.box.id, state, previous: {}, retained: true, topic: "snapshot" });
+    if (state) await Promise.all([
+      this.queueState({ boxId: this.box.id, state, previous: {}, retained: true, topic: "snapshot" }),
+      this.queueMetadata(state)
+    ]);
+    if (this.closed) return;
     this.refreshTimer = this.homey.setInterval(() => this.refresh(), 60000);
     this.countdownTimer = this.homey.setInterval(() => this.updateCountdown(), 15000);
   }
 
   async refresh() {
+    if (this.closed) return;
+    this.refreshing ??= this.refreshSettings().finally(() => { this.refreshing = undefined; });
+    return this.refreshing;
+  }
+
+  async refreshSettings() {
     const box = await this.account.cloud.getToniebox(this.box.householdId, this.box.id);
     if (this.closed) return;
     this.box = { ...this.box, ...box };
-    if (typeof box.lightringBrightness === "number") await this.setCapabilityValue("ring_brightness", box.lightringBrightness);
-    await this.setSettings({ firmware: String(box.firmwareVersion ?? "Unknown"), box_id: this.box.id });
+    if (typeof box.lightringBrightness === "number") await this.setValue("ring_brightness", box.lightringBrightness);
+    if (this.closed) return;
+    const firmware = String(box.firmwareVersion ?? "Unknown");
+    if (this.getSetting("firmware") !== firmware || this.getSetting("box_id") !== this.box.id) await this.setSettings({ firmware, box_id: this.box.id });
+  }
+
+  queueState(event) {
+    if (this.closed) return;
+    this.latestState = event.state;
+    const transitions = this.flowEvents(event);
+    const queued = { event, transitions };
+    const last = this.stateEvents.at(-1);
+    if (last && !last.transitions.length && !transitions.length) this.stateEvents[this.stateEvents.length - 1] = queued;
+    else {
+      if (this.stateEvents.length >= 256) return Promise.reject(new Error("Toniebox Flow backlog exceeded 256 events"));
+      this.stateEvents.push(queued);
+    }
+    if (this.pending) return;
+    this.pending = this.drainState();
+    return this.pending;
+  }
+
+  async drainState() {
+    try {
+      while (!this.closed && this.stateEvents.length) {
+        const { event, transitions } = this.stateEvents.shift();
+        await this.updateState({ ...event, retained: true });
+        for (const [id, tokens] of transitions) {
+          if (this.closed) break;
+          if (tokens.tonie_id !== undefined) tokens.title = this.trackTitle(event.state);
+          await this.trigger(id, tokens);
+        }
+      }
+    } finally {
+      this.pending = undefined;
+    }
+  }
+
+  async setValue(name, value) {
+    if (!this.closed && !Object.is(this.getCapabilityValue(name), value)) await this.setCapabilityValue(name, value);
+  }
+
+  queueMetadata(state) {
+    if (this.closed) return;
+    const playback = state.onlineState === "connected" ? state.playback : undefined;
+    if (playback === this.metadataTarget?.playback && (this.metadataPending || this.metadataCache.has(this.metadataTarget?.key))) return;
+    const key = playback?.tonie ? JSON.stringify([playback.tonie, playback.contentVersion ?? 0]) : undefined;
+    this.metadataTarget = key ? { key, playback } : undefined;
+    if (!key || this.metadataCache.has(key) || this.metadataPending) return;
+    const lifecycle = this.lifecycle;
+    this.metadataPending = this.loadMetadata(lifecycle).finally(() => {
+      if (lifecycle === this.lifecycle) this.metadataPending = undefined;
+    });
+    return this.metadataPending;
+  }
+
+  async loadMetadata(lifecycle) {
+    while (!this.closed && lifecycle === this.lifecycle && this.metadataTarget && !this.metadataCache.has(this.metadataTarget.key)) {
+      const { key, playback } = this.metadataTarget;
+      const metadata = await this.account.cloud.playbackInfo(this.box.id, playback.tonie, playback.contentVersion ?? 0);
+      if (this.closed || lifecycle !== this.lifecycle) return;
+      const title = value => typeof value === "string" ? value : undefined;
+      this.metadataCache.set(key, {
+        title: title(metadata?.title),
+        chapters: Array.isArray(metadata?.chapters) ? metadata.chapters.map(chapter => ({ title: title(chapter?.title) })) : []
+      });
+      if (this.metadataCache.size > 16) this.metadataCache.delete(this.metadataCache.keys().next().value);
+      if (this.metadataTarget?.key === key) {
+        await this.queueState({ boxId: this.box.id, state: this.latestState, previous: {}, retained: true, topic: "metadata" });
+      }
+    }
+  }
+
+  trackTitle(state) {
+    const playback = state.playback;
+    const metadata = playback?.tonie && state.onlineState === "connected"
+      ? this.metadataCache.get(JSON.stringify([playback.tonie, playback.contentVersion ?? 0])) : undefined;
+    return metadata?.chapters?.[playback?.chapter]?.title ?? metadata?.title ?? "";
   }
 
   async updateState(event) {
     if (this.closed) return;
-    const { state, previous, retained, topic } = event;
+    const { state } = event;
     if (state.onlineState !== undefined) {
       const online = state.onlineState === "connected";
-      await this.setCapabilityValue("toniebox_online", online);
-      if (online) await this.setAvailable();
-      else await this.setUnavailable("Toniebox is sleeping or offline; squeeze an ear to wake it");
+      await this.setValue("toniebox_online", online);
+      if (this.online !== online && !this.closed) {
+        if (online) await this.setAvailable();
+        else await this.setUnavailable("Toniebox is sleeping or offline; squeeze an ear to wake it");
+        this.online = online;
+      }
       if (!online) {
-        await this.setCapabilityValue("speaker_playing", false);
-        await this.setCapabilityValue("tonie_id", "");
-        await this.setCapabilityValue("speaker_track", "");
-        await this.setCapabilityValue("chapter_number", 0);
+        await this.setValue("speaker_playing", false);
+        await this.setValue("tonie_id", "");
+        await this.setValue("speaker_track", "");
+        await this.setValue("chapter_number", 0);
       }
     }
     if (state.battery?.percent !== undefined) {
-      await this.setCapabilityValue("measure_battery", state.battery.percent);
-      await this.setCapabilityValue("alarm_battery", state.battery.percent <= 20);
+      await this.setValue("measure_battery", state.battery.percent);
+      await this.setValue("alarm_battery", state.battery.percent <= 20);
     }
-    if (typeof state.volume?.level === "number") await this.setCapabilityValue("volume_set", state.volume.level / 13);
-    if (state.headphones) await this.setCapabilityValue("headphones_connected", this.headphonesConnected(state));
-    if (state.playback) {
+    if (typeof state.volume?.level === "number") await this.setValue("volume_set", state.volume.level / 13);
+    if (state.headphones) await this.setValue("headphones_connected", this.headphonesConnected(state));
+    if (state.playback && state.onlineState === "connected") {
       const playback = state.playback;
-      if (!playback.tonie) this.metadata = undefined;
-      await this.setCapabilityValue("speaker_playing", state.onlineState === "connected" && this.sdk.isPlaying(playback));
-      await this.setCapabilityValue("tonie_id", playback.tonie ?? "");
-      await this.setCapabilityValue("chapter_number", Number.isInteger(playback.chapter) ? playback.chapter + 1 : 0);
-      if (playback.tonie && (playback.tonie !== previous.playback?.tonie || playback.contentVersion !== previous.playback?.contentVersion)) {
-        this.metadata = await this.account.cloud.playbackInfo(this.box.id, playback.tonie, playback.contentVersion ?? 0);
-      }
-      const chapter = this.metadata?.chapters?.[playback.chapter];
-      await this.setCapabilityValue("speaker_track", chapter?.title ?? this.metadata?.title ?? "");
+      await this.setValue("speaker_playing", state.onlineState === "connected" && this.sdk.isPlaying(playback));
+      await this.setValue("tonie_id", playback.tonie ?? "");
+      await this.setValue("chapter_number", Number.isInteger(playback.chapter) ? playback.chapter + 1 : 0);
+      await this.setValue("speaker_track", this.trackTitle(state));
     }
     if (state.bedtime?.stl) {
-      await this.setCapabilityValue("night_mode", state.bedtime.stl.state === "on");
+      await this.setValue("night_mode", state.bedtime.stl.state === "on");
       this.sleepTimer = state.bedtime.stl;
       await this.updateCountdown();
     }
-    if (retained) return;
-    const tokens = { tonie_id: state.playback?.tonie ?? "", chapter: (state.playback?.chapter ?? -1) + 1, title: this.getCapabilityValue("speaker_track") ?? "" };
+    for (const [id, tokens] of this.flowEvents(event)) await this.trigger(id, tokens);
+  }
+
+  flowEvents({ state, previous, retained, topic }) {
+    const events = [];
+    if (retained) return events;
+    const add = (id, tokens = {}) => events.push([id, tokens]);
+    const tokens = { tonie_id: state.playback?.tonie ?? "", chapter: (state.playback?.chapter ?? -1) + 1, title: this.trackTitle(state) };
     if (topic === "playback/state") {
-      if (this.sdk.isPlaying(state.playback) && !this.sdk.isPlaying(previous.playback)) await this.trigger("playback_started", tokens);
-      if (state.playback?.paused === true && previous.playback?.paused === false) await this.trigger("playback_paused", tokens);
-      if (state.playback?.ended === true && previous.playback?.ended === false) await this.trigger("playback_ended", tokens);
-      if (previous.playback && state.playback?.tonie !== previous.playback.tonie) await this.trigger("tonie_changed", tokens);
-      if (previous.playback && state.playback?.chapter !== previous.playback.chapter) await this.trigger("chapter_changed", tokens);
+      if (this.sdk.isPlaying(state.playback) && !this.sdk.isPlaying(previous.playback)) add("playback_started", tokens);
+      if (state.playback?.paused === true && previous.playback?.paused === false) add("playback_paused", tokens);
+      if (state.playback?.ended === true && previous.playback?.ended === false) add("playback_ended", tokens);
+      if (previous.playback && state.playback?.tonie !== previous.playback.tonie) add("tonie_changed", tokens);
+      if (previous.playback && state.playback?.chapter !== previous.playback.chapter) add("chapter_changed", tokens);
     }
-    if (topic === "online-state" && state.onlineState !== previous.onlineState) await this.trigger(state.onlineState === "connected" ? "box_online" : "box_offline");
+    if (topic === "online-state" && state.onlineState !== previous.onlineState) add(state.onlineState === "connected" ? "box_online" : "box_offline");
     if (topic === "app-reply/bedtime-state" && state.bedtime?.stl?.state !== previous.bedtime?.stl?.state) {
       const timerState = state.bedtime?.stl?.state;
-      if (timerState === "on") await this.trigger("night_mode_started");
-      else if (previous.bedtime?.stl?.state === "on") await this.trigger("night_mode_ended");
-      if (timerState === "completed") await this.trigger("sleep_timer_completed");
+      if (timerState === "on") add("night_mode_started");
+      else if (previous.bedtime?.stl?.state === "on") add("night_mode_ended");
+      if (timerState === "completed") add("sleep_timer_completed");
     }
-    if (topic === "metrics/headphones" && previous.headphones && this.headphonesConnected(state) !== this.headphonesConnected(previous)) await this.trigger("headphones_changed", { connected: this.headphonesConnected(state) });
-    if (topic === "metrics/battery" && previous.battery?.percent > 20 && state.battery?.percent <= 20) await this.trigger("battery_low", { percent: state.battery.percent });
-    if (topic === "settings-applied") await this.trigger("settings_applied");
+    if (topic === "metrics/headphones" && previous.headphones && this.headphonesConnected(state) !== this.headphonesConnected(previous)) add("headphones_changed", { connected: this.headphonesConnected(state) });
+    if (topic === "metrics/battery" && previous.battery?.percent > 20 && state.battery?.percent <= 20) add("battery_low", { percent: state.battery.percent });
+    if (topic === "settings-applied") add("settings_applied");
+    return events;
   }
 
   headphonesConnected(state) {
@@ -107,7 +220,7 @@ class TonieboxDevice extends Homey.Device {
     if (this.closed) return;
     const timer = this.sleepTimer;
     const remaining = timer?.state === "on" ? (typeof timer.until === "number" ? Math.max(0, (timer.until * 1000 - Date.now()) / 60000) : null) : 0;
-    await this.setCapabilityValue("sleep_timer_remaining", remaining === null ? null : Math.round(remaining * 10) / 10);
+    await this.setValue("sleep_timer_remaining", remaining === null ? null : Math.round(remaining * 10) / 10);
   }
 
   trigger(id, tokens = {}) { return this.homey.flow.getDeviceTriggerCard(id).trigger(this, tokens, {}); }
@@ -161,14 +274,25 @@ class TonieboxDevice extends Homey.Device {
 
   settings(settings) { return this.account.cloud.setTonieboxSettings(this.box.householdId, this.box.id, settings); }
 
-  async onUninit() {
+  onUninit() {
+    if (this.stopping) return this.stopping;
     this.closed = true;
+    this.stopping = this.uninitialize().finally(() => { this.stopping = undefined; });
+    return this.stopping;
+  }
+
+  async uninitialize() {
+    this.stateEvents = [];
     if (this.refreshTimer) this.homey.clearInterval(this.refreshTimer);
     if (this.countdownTimer) this.homey.clearInterval(this.countdownTimer);
     if (this.stateListener) this.account?.realtime.off("state", this.stateListener);
+    if (this.metadataListener) this.account?.realtime.off("state", this.metadataListener);
     try {
-      await this.pending;
+      await Promise.all([this.initializing, this.pending, this.metadataPending, this.refreshing]);
     } finally {
+      this.metadataCache?.clear();
+      this.metadataTarget = undefined;
+      this.latestState = undefined;
       await this.homey.app.releaseAccount(this.accountId, this);
     }
   }

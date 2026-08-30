@@ -17,6 +17,7 @@
     "build": "node scripts/build.mjs && homey app build",
     "validate": "node scripts/build.mjs && homey app validate --level debug",
     "test": "node --test test/*.test.js",
+    "test:memory": "node --expose-gc test/app.test.js",
     "smoke:build": "node scripts/smoke.mjs",
     "verify": "npm test && npm run validate && npm run build && npm run smoke:build"
   },

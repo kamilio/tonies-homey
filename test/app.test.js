@@ -22,13 +22,19 @@ const Device = load("drivers/toniebox2/device.js");
 const Driver = load("drivers/toniebox2/driver.js");
 const box = { id: "TB2", householdId: "household", product: "tb2", generation: "tng", name: "Bedroom", features: ["playbackControls", "sleepTimerAlarm"], lightringBrightness: 30 };
 
-async function fixture() {
+function deferred() {
+  return Promise.withResolvers();
+}
+
+async function fixture(options = {}) {
   const values = new Map();
   const listeners = new Map();
   const triggers = [];
   const controls = [];
   const timers = new Set();
-  const realtime = new EventEmitter();
+  const errors = [];
+  const realtime = new EventEmitter({ captureRejections: true });
+  realtime.on("error", error => errors.push(error));
   realtime.states = new Map();
   realtime.waitForState = async () => ({});
   for (const method of ["play", "pause", "skip", "changeVolume", "setVolume", "sleepTimer", "seek", "sleep"]) realtime[method] = async (...args) => { controls.push({ method, args }); return { acknowledged: true, deviceConfirmed: false }; };
@@ -55,9 +61,18 @@ async function fixture() {
   device.setAvailable = async () => { device.available = true; };
   device.setUnavailable = async message => { device.available = false; device.unavailableMessage = message; };
   device.registerCapabilityListener = (name, listener) => listeners.set(name, listener);
-  await device.onInit();
-  const send = async (topic, state, previous = {}, retained = false) => device.updateState({ topic, state, previous, retained, boxId: box.id });
-  return { device, account, values, listeners, triggers, controls, timers, send };
+  if (options.initialize !== false) await device.onInit();
+  const emit = (topic, state, previous = {}, retained = false) => {
+    realtime.states.set(box.id, state);
+    realtime.emit("state", { topic, state, previous, retained, boxId: box.id });
+  };
+  const send = async (...args) => {
+    emit(...args);
+    await device.pending;
+    await device.metadataPending;
+    await device.pending;
+  };
+  return { device, account, values, listeners, triggers, controls, timers, send, emit, errors };
 }
 
 test("every advertised action maps to an implemented device method", () => {
@@ -114,6 +129,85 @@ test("account connection sharing deduplicates logins and releases failed initial
   assert(!app.accounts.has("other"));
 });
 
+test("pairing cannot reuse a previous login after a failed replacement", async () => {
+  const driver = new Driver();
+  const handlers = new Map();
+  driver.homey = { app: { signIn: async username => {
+    assert.equal(username, "valid");
+    return { accountId: username, boxes: [box] };
+  } } };
+  await driver.onPair({ setHandler: (name, handler) => handlers.set(name, handler) });
+  await handlers.get("login")({ username: "valid" });
+  await assert.rejects(handlers.get("login")({ username: "invalid" }));
+  await assert.rejects(handlers.get("list_devices")(), /Sign in/);
+});
+
+test("pairing discards superseded and disconnected login results", async () => {
+  const driver = new Driver();
+  const handlers = new Map();
+  const first = deferred();
+  const second = deferred();
+  driver.homey = { app: { signIn: username => username === "first" ? first.promise : second.promise } };
+  await driver.onPair({ setHandler: (name, handler) => handlers.set(name, handler) });
+  const oldLogin = handlers.get("login")({ username: "first" });
+  const latestLogin = handlers.get("login")({ username: "second" });
+  second.resolve({ accountId: "second", boxes: [box] });
+  assert.equal(await latestLogin, true);
+  first.resolve({ accountId: "first", boxes: [box] });
+  assert.equal(await oldLogin, false);
+  assert.equal((await handlers.get("list_devices")())[0].store.accountId, "second");
+  await handlers.get("disconnect")();
+  assert.equal(await handlers.get("login")({ username: "second" }), false);
+  await assert.rejects(handlers.get("list_devices")());
+});
+
+test("disconnect during pairing never resurrects a pending account", async () => {
+  const driver = new Driver();
+  const handlers = new Map();
+  const pending = deferred();
+  driver.homey = { app: { signIn: () => pending.promise } };
+  await driver.onPair({ setHandler: (name, handler) => handlers.set(name, handler) });
+  const login = handlers.get("login")({ username: "user" });
+  await handlers.get("disconnect")();
+  pending.resolve({ accountId: "account", boxes: [box] });
+  assert.equal(await login, false);
+  await assert.rejects(handlers.get("list_devices")());
+});
+
+test("releasing an account cannot lend or delete a closing connection", async () => {
+  const app = new App();
+  const closing = deferred();
+  const device = {};
+  const previous = { devices: new Set([device]), realtime: { disconnect: () => closing.promise } };
+  const replacement = { devices: new Set(), realtime: {} };
+  app.accounts = new Map([["account", previous]]);
+  app.connecting = new Map();
+  app.createAccount = async () => replacement;
+  const release = app.releaseAccount("account", device);
+  assert.equal(await app.getAccount("account"), replacement);
+  closing.resolve();
+  await release;
+  assert.equal(app.accounts.get("account"), replacement);
+  await app.releaseAccount("account", device);
+  assert.equal(app.accounts.get("account"), replacement);
+});
+
+test("repair rejects overlapping logins and ignores disconnect before authentication", async () => {
+  const driver = new Driver();
+  const handlers = new Map();
+  const pending = deferred();
+  let uninitializations = 0;
+  driver.homey = { app: { signIn: () => pending.promise } };
+  const device = { getData: () => box, onUninit: async () => { uninitializations++; } };
+  await driver.onRepair({ setHandler: (name, handler) => handlers.set(name, handler) }, device);
+  const repair = handlers.get("login")({ username: "user" });
+  await assert.rejects(handlers.get("login")({ username: "other" }), /already in progress/);
+  await handlers.get("disconnect")();
+  pending.resolve({ accountId: "account", boxes: [box] });
+  assert.equal(await repair, false);
+  assert.equal(uninitializations, 0);
+});
+
 test("sign-in filters original boxes and other TNG products before pairing", async () => {
   const app = new App();
   const stored = new Map();
@@ -131,6 +225,41 @@ test("sign-in filters original boxes and other TNG products before pairing", asy
   assert.equal(account.boxes[0].id, "TB2");
   assert.equal(stored.get("tonies.auth.account").refreshToken, "refresh");
   assert(!JSON.stringify([...stored.values()]).includes("password"));
+});
+
+test("repair adopts credentials into an account still connecting", async () => {
+  const app = new App();
+  const stored = new Map([["tonies.auth.account", { accessToken: "old", refreshToken: "old-refresh" }]]);
+  const listing = deferred();
+  const started = deferred();
+  const device = {};
+  let existing;
+  app.accounts = new Map();
+  app.connecting = new Map();
+  app.homey = { settings: { get: key => stored.get(key), set: (key, value) => stored.set(key, value) } };
+  app.sdk = async () => ({
+    isToniebox2: value => value.product === "tb2",
+    TonieCloudClient: class {
+      constructor(options = {}) { this.options = options; this.auth = options.auth; if (options.auth) existing = this; }
+      async login() { this.auth = { accessToken: "repaired", refreshToken: "repaired-refresh" }; }
+      async request() { return { uuid: "account" }; }
+      async listTonieboxes() { if (this.options.auth) { started.resolve(); await listing.promise; } return [box]; }
+      async setAuth(auth) { this.auth = auth; this.options.onAuth(auth); }
+    },
+    ToniesRealtime: class extends EventEmitter { async connect() {} async disconnect() {} }
+  });
+  const connecting = app.getAccount("account", device);
+  await started.promise;
+  await app.signIn("user", "password");
+  assert.equal(existing.auth.accessToken, "repaired");
+  assert.equal(stored.get("tonies.auth.account").accessToken, "repaired");
+  listing.resolve();
+  const account = await connecting;
+  assert.equal(account.cloud, existing);
+  await app.releaseAccount("account", device);
+  existing.options.onAuth({ accessToken: "late-old-token" });
+  assert.equal(stored.get("tonies.auth.account").accessToken, "repaired");
+  assert.equal(app.clients.size, 0);
 });
 
 test("night-mode toggle and Flow controls send native timer commands and reject bad values", async () => {
@@ -213,4 +342,191 @@ test("offline, battery, headphones and cleanup preserve device lifecycle", async
   assert.equal(timers.size, 0);
   assert.equal(account.realtime.listenerCount("state"), 0);
   assert.equal(account.devices.size, 0);
+});
+
+test("20,000 telemetry snapshots coalesce without redundant Homey writes", async context => {
+  const { device, emit, values } = await fixture();
+  const blocked = deferred();
+  let writes = 0;
+  device.setCapabilityValue = async (name, value) => {
+    writes++;
+    await blocked.promise;
+    values.set(name, value);
+  };
+  const initial = { onlineState: "connected", volume: { level: 1 } };
+  emit("volume/state", initial, {}, true);
+  global.gc?.();
+  const memoryBefore = process.memoryUsage().heapUsed;
+  const started = performance.now();
+  for (let index = 0; index < 20000; index++) emit("volume/state", { ...initial, volume: { level: index % 14 } }, initial);
+  const elapsed = performance.now() - started;
+  global.gc?.();
+  const memoryGrowth = process.memoryUsage().heapUsed - memoryBefore;
+  assert.equal(device.stateEvents.length, 1);
+  if (global.gc) assert(memoryGrowth < 8 * 1024 * 1024, `Unexpected retained heap growth: ${memoryGrowth}`);
+  blocked.resolve();
+  await device.pending;
+  assert(writes <= 3, `Expected at most three writes, saw ${writes}`);
+  assert.equal(values.get("volume_set"), 19999 % 14 / 13);
+  context.diagnostic(`20,000 snapshots: ${elapsed.toFixed(1)} ms; ${writes} capability writes; retained heap delta ${memoryGrowth} bytes${global.gc ? " after GC" : " (GC not forced)"}`);
+  await device.onUninit();
+});
+
+test("telemetry coalescing preserves meaningful playback transitions", async () => {
+  const { device, emit, triggers } = await fixture();
+  const playing = { onlineState: "connected", playback: { tonie: "TONIE", chapter: 0, paused: false } };
+  const paused = { ...playing, playback: { ...playing.playback, paused: true } };
+  emit("playback/state", paused, {}, true);
+  emit("playback/state", playing, paused);
+  for (let index = 0; index < 2000; index++) emit("playback/state", { ...playing, playback: { ...playing.playback, chapterPositionMs: index } }, playing);
+  emit("playback/state", paused, playing);
+  assert(device.stateEvents.length <= 3);
+  await device.pending;
+  await device.metadataPending;
+  await device.pending;
+  assert.deepEqual(triggers.map(event => event.id), ["playback_started", "playback_paused"]);
+  await device.onUninit();
+});
+
+test("slow metadata never blocks night mode or duplicates requests", async () => {
+  const { device, account, emit, values, triggers } = await fixture();
+  const blocked = deferred();
+  let requests = 0;
+  account.cloud.playbackInfo = async () => { requests++; return blocked.promise; };
+  const initial = { onlineState: "connected", playback: { tonie: "TONIE", chapter: 0, paused: false }, bedtime: { stl: { state: "off" } } };
+  emit("playback/state", initial, {}, true);
+  await new Promise(resolve => setImmediate(resolve));
+  const night = { ...initial, bedtime: { stl: { state: "on" } } };
+  emit("app-reply/bedtime-state", night, initial);
+  for (let index = 0; index < 2000; index++) emit("playback/state", night, night);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(values.get("night_mode"), true);
+  assert.equal(triggers.filter(event => event.id === "night_mode_started").length, 1);
+  assert.equal(requests, 1);
+  blocked.resolve({ title: "Story", chapters: [{ title: "First" }] });
+  await device.metadataPending;
+  await device.pending;
+  assert.equal(values.get("speaker_track"), "First");
+  await device.onUninit();
+});
+
+test("metadata responses cannot overwrite a different Tonie and cache stays bounded", async () => {
+  const { device, account, send, emit, values } = await fixture();
+  const blocked = deferred();
+  const requests = [];
+  account.cloud.playbackInfo = async (_, tonie) => {
+    requests.push(tonie);
+    return tonie === "OLD" ? blocked.promise : { title: tonie };
+  };
+  const state = tonie => ({ onlineState: "connected", playback: { tonie, chapter: 0, paused: true } });
+  emit("playback/state", state("OLD"), {}, true);
+  emit("playback/state", state("NEW"), state("OLD"));
+  blocked.resolve({ title: "Stale title" });
+  await device.metadataPending;
+  await device.pending;
+  assert.equal(values.get("speaker_track"), "NEW");
+  assert.deepEqual(requests, ["OLD", "NEW"]);
+  for (let index = 0; index < 40; index++) await send("playback/state", state(`TONIE${index}`), {}, true);
+  assert.equal(device.metadataCache.size, 16);
+  assert(!device.metadataCache.has(JSON.stringify(["OLD", 0])));
+  const before = requests.length;
+  await send("playback/state", state("TONIE39"), {}, true);
+  assert.equal(requests.length, before);
+  await device.onUninit();
+  assert.equal(device.metadataCache.size, 0);
+});
+
+test("state-write failures are reported without poisoning later updates", async () => {
+  const { device, emit, send, values, errors } = await fixture();
+  const write = device.setCapabilityValue;
+  device.setCapabilityValue = async () => { throw new Error("write unavailable"); };
+  emit("volume/state", { onlineState: "connected", volume: { level: 2 } }, {}, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /write unavailable/);
+  device.setCapabilityValue = write;
+  await send("volume/state", { onlineState: "connected", volume: { level: 5 } }, {}, true);
+  assert.equal(values.get("volume_set"), 5 / 13);
+  await device.onUninit();
+});
+
+test("a metadata failure is reported and a later state can retry", async () => {
+  const { device, account, emit, send, values, errors } = await fixture();
+  account.cloud.playbackInfo = async () => { throw new Error("metadata unavailable"); };
+  const state = { onlineState: "connected", playback: { tonie: "TONIE", chapter: 0, paused: false } };
+  emit("playback/state", state, {}, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(errors.length, 1);
+  assert.equal(values.get("speaker_playing"), true);
+  account.cloud.playbackInfo = async () => ({ title: "Recovered" });
+  await send("playback/state", state, state);
+  assert.equal(values.get("speaker_track"), "Recovered");
+  await device.onUninit();
+});
+
+test("meaningful Flow backlogs are capped and explicitly reject overflow", async () => {
+  const { device, values, triggers } = await fixture();
+  const blocked = deferred();
+  device.setCapabilityValue = async (name, value) => { await blocked.promise; values.set(name, value); };
+  const event = { boxId: box.id, topic: "settings-applied", state: { onlineState: "connected" }, previous: {}, retained: false };
+  const first = device.queueState(event);
+  for (let index = 0; index < 256; index++) await device.queueState(event);
+  await assert.rejects(device.queueState(event), /backlog exceeded/);
+  assert.equal(device.stateEvents.length, 256);
+  blocked.resolve();
+  await first;
+  assert.equal(triggers.length, 257);
+  assert.equal(device.stateEvents.length, 0);
+  await device.onUninit();
+});
+
+test("concurrent settings refreshes share one request and avoid late writes", async () => {
+  const { device, account, values } = await fixture();
+  const blocked = deferred();
+  let requests = 0;
+  account.cloud.getToniebox = async () => { requests++; return blocked.promise; };
+  const refreshes = Array.from({ length: 100 }, () => device.refresh());
+  const stopping = device.onUninit();
+  blocked.resolve({ ...box, lightringBrightness: 99 });
+  await Promise.all([...refreshes, stopping]);
+  assert.equal(requests, 1);
+  assert.equal(values.get("ring_brightness"), 30);
+});
+
+test("uninitialization during discovery never resurrects listeners or timers", async () => {
+  const { device, account, timers } = await fixture({ initialize: false });
+  const blocked = deferred();
+  device.homey.app.getAccount = async () => { await blocked.promise; account.devices.add(device); return account; };
+  const initializing = device.onInit();
+  const stopping = device.onUninit();
+  blocked.resolve();
+  await Promise.all([initializing, stopping]);
+  assert.equal(timers.size, 0);
+  assert.equal(account.realtime.listenerCount("state"), 0);
+  assert.equal(account.devices.size, 0);
+  await device.onInit();
+  assert.equal(timers.size, 2);
+  await device.onUninit();
+});
+
+test("failed initialization releases its acquired account and state listeners", async () => {
+  const { device, account, timers } = await fixture({ initialize: false });
+  account.cloud.getToniebox = async () => { throw new Error("settings unavailable"); };
+  await assert.rejects(device.onInit(), /settings unavailable/);
+  assert.equal(account.devices.size, 0);
+  assert.equal(account.realtime.listenerCount("state"), 0);
+  assert.equal(timers.size, 0);
+  assert.equal(device.closed, true);
+});
+
+test("50 initialize/uninitialize cycles release every listener and timer", async () => {
+  const { device, account, timers } = await fixture({ initialize: false });
+  for (let index = 0; index < 50; index++) {
+    await device.onInit();
+    assert.equal(account.realtime.listenerCount("state"), 2);
+    await device.onUninit();
+    assert.equal(account.realtime.listenerCount("state"), 0);
+    assert.equal(timers.size, 0);
+    assert.equal(account.devices.size, 0);
+  }
 });
