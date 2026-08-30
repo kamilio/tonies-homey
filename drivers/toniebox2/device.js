@@ -23,6 +23,7 @@ class TonieboxDevice extends Homey.Device {
   async initialize() {
     this.lifecycle = {};
     this.controlController = new AbortController();
+    this.onlineController = new AbortController();
     this.controls = new Set();
     this.controlQueues = new Map();
     this.online = undefined;
@@ -89,6 +90,9 @@ class TonieboxDevice extends Homey.Device {
 
   queueState(event) {
     if (this.closed) return;
+    if (event.state.onlineState === "connected") {
+      if (this.onlineController.signal.aborted) this.onlineController = new AbortController();
+    } else if (event.state.onlineState !== undefined) this.onlineController.abort();
     this.latestState = event.state;
     const transitions = this.flowEvents(event);
     const queued = { event, transitions };
@@ -258,10 +262,15 @@ class TonieboxDevice extends Homey.Device {
     return pending;
   }
 
+  realtimeControl(operation) {
+    const signal = this.onlineController?.signal;
+    return this.control(() => this.account.realtime.withCancellation(signal, operation));
+  }
+
   queueControl(channel, operation, timeoutMs = 10000) {
     const queues = this.controlQueues;
     const previous = queues?.get(channel);
-    const pending = this.control(() => {
+    const pending = this.realtimeControl(() => {
       const deadline = new AbortController();
       const expiresAt = Date.now() + timeoutMs;
       const timer = setTimeout(() => deadline.abort(), timeoutMs);
@@ -300,7 +309,7 @@ class TonieboxDevice extends Homey.Device {
   previous() { return this.changeChapter(-1); }
   volumeUp() { return this.volumeControl(1, true); }
   volumeDown() { return this.volumeControl(-1, true); }
-  sleepNow() { return this.control(() => this.account.realtime.sleep(this.box.id)); }
+  sleepNow() { return this.realtimeControl(() => this.account.realtime.sleep(this.box.id)); }
   nightModeOff() { return this.nightMode(0); }
 
   nightModeOn({ minutes }) {
@@ -310,7 +319,7 @@ class TonieboxDevice extends Homey.Device {
 
   nightMode(seconds) {
     const state = seconds > 0 ? "on" : "off";
-    return this.control(() => this.account.realtime.withConfirmation(this.box.id, "app-reply/bedtime-state", reply => reply.bedtime?.stl?.state === state && (!seconds || reply.bedtime.stl.duration === seconds),
+    return this.realtimeControl(() => this.account.realtime.withConfirmation(this.box.id, "app-reply/bedtime-state", reply => reply.bedtime?.stl?.state === state && (!seconds || reply.bedtime.stl.duration === seconds),
       () => this.account.realtime.sleepTimer(this.box.id, seconds)));
   }
 

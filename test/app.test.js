@@ -851,6 +851,69 @@ test("broker loss cancels a bounded volume queue without replaying it after reco
   assert((await next).deviceConfirmed);
 });
 
+test("sleeping and waking a box cancels old controls without replaying its queue", async context => {
+  const { device, socket, send } = await realtimeFixture(context);
+  send("volume/state", { level: 5 }, true);
+  const pending = Promise.allSettled([device.volumeUp(), device.volumeUp(), device.nightModeOn({ minutes: 30 })]);
+  context.after(() => pending);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(socket.published.length, 2);
+  send("online-state", { onlineState: "offline" });
+  await device.setVolumeLimit({ percent: 50 });
+  send("online-state", { onlineState: "connected" });
+  send("volume/state", { level: 6 });
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 1800 } });
+  await new Promise(resolve => setImmediate(resolve));
+  send("volume/state", { level: 7 });
+  assert((await pending).every(result => result.status === "rejected" && result.reason.name === "AbortError"));
+  assert.equal(socket.published.length, 2);
+  const fresh = device.volumeUp();
+  await new Promise(resolve => setImmediate(resolve));
+  send("volume/state", { level: 8 });
+  assert((await fresh).deviceConfirmed);
+});
+
+test("same-turn sleep and wake cannot revive controls still preparing to publish", async context => {
+  const { device, realtime, socket, send } = await realtimeFixture(context);
+  send("volume/state", { level: 5 }, true);
+  send("playback/state", { tonie: "TONIE", chapter: 0, paused: false }, true);
+  const pending = Promise.allSettled([device.volumeUp(), device.next(), device.nightModeOn({ minutes: 30 })]);
+  send("online-state", { onlineState: "offline" });
+  send("online-state", { onlineState: "connected" });
+  assert((await pending).every(result => result.status === "rejected" && result.reason.name === "AbortError"));
+  assert.equal(socket.published.length, 0);
+  await Promise.all(device.controlQueues.values());
+  assert.equal(device.controls.size, 0);
+  assert.equal(device.controlQueues.size, 0);
+  assert.equal(realtime.listenerCount("state"), 2);
+  assert.equal(realtime.listenerCount("error"), 1);
+});
+
+test("waking a box waits for new volume and never restores stale night or headphone state", async context => {
+  const { device, socket, send, values } = await realtimeFixture(context);
+  send("volume/state", { level: 5 }, true);
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 1800 } }, true);
+  send("metrics/headphones", { connected: ["headphones"] }, true);
+  await device.pending;
+  assert.equal(values.get("night_mode"), true);
+  assert.equal(values.get("headphones_connected"), true);
+  send("online-state", { onlineState: "offline" });
+  send("online-state", { onlineState: "connected" });
+  await device.pending;
+  assert.equal(values.get("night_mode"), null);
+  assert.equal(values.get("headphones_connected"), null);
+  const volume = device.volumeUp();
+  const settled = Promise.allSettled([volume]);
+  context.after(() => settled);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(socket.published.length, 0);
+  send("volume/state", { level: 10 });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(socket.published[0].payload.level, 11);
+  send("volume/state", { level: 11 });
+  assert((await volume).deviceConfirmed);
+});
+
 test("a volume confirmation timeout does not poison the next queued request", async context => {
   const { device, realtime, socket, send } = await realtimeFixture(context);
   send("volume/state", { level: 5 }, true);
