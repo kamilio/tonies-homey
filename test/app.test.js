@@ -550,6 +550,15 @@ test("valid state restores availability after a transient SDK error", async () =
   await device.onUninit();
 });
 
+test("successful refresh restores availability without new MQTT traffic", async () => {
+  const { device, send } = await fixture();
+  await send("volume/state", { onlineState: "connected", volume: { level: 3 } }, {}, true);
+  await device.setUnavailable("Temporary settings failure");
+  await device.refresh();
+  assert.equal(device.available, true);
+  await device.onUninit();
+});
+
 test("broker loss clears stale night-mode and headphone conditions", async () => {
   const { device, send, values, triggers } = await fixture();
   const state = { onlineState: "connected", bedtime: { stl: { state: "on" } }, headphones: { connected: ["headphones"] } };

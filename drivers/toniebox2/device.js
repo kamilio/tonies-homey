@@ -56,12 +56,6 @@ class TonieboxDevice extends Homey.Device {
     this.registerCapabilityListener("ring_brightness", brightness => this.setRingBrightness({ brightness }));
     await this.refresh();
     if (this.closed) return;
-    const state = this.account.realtime.states.get(this.box.id);
-    if (state) await Promise.all([
-      this.queueState({ boxId: this.box.id, state, previous: {}, retained: true, topic: "snapshot" }),
-      this.queueMetadata(state)
-    ]);
-    if (this.closed) return;
     this.refreshTimer = this.homey.setInterval(() => this.tasks.emit("refresh"), 60000);
     this.countdownTimer = this.homey.setInterval(() => this.tasks.emit("countdown"), 15000);
   }
@@ -80,6 +74,12 @@ class TonieboxDevice extends Homey.Device {
     if (this.closed) return;
     const firmware = String(box.firmwareVersion ?? "Unknown");
     if (this.getSetting("firmware") !== firmware || this.getSetting("box_id") !== this.box.id) await this.setSettings({ firmware, box_id: this.box.id });
+    if (this.closed) return;
+    const state = this.account.realtime.states.get(this.box.id);
+    if (state) await Promise.all([
+      this.queueState({ boxId: this.box.id, state, previous: {}, retained: true, topic: "snapshot" }),
+      this.queueMetadata(state)
+    ]);
   }
 
   queueState(event) {
