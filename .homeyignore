@@ -1,0 +1,14 @@
+test/
+scripts/
+vendor/
+.git/
+.github/
+.env*
+env.json
+.npmrc
+.netrc
+*.pem
+*.key
+node_modules/homey/
+node_modules/@resvg/
+USAGE.md

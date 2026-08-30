@@ -1,0 +1,1028 @@
+{
+  "id": "com.kjopek.tonies",
+  "version": "0.1.0",
+  "compatibility": ">=12.9.0",
+  "sdk": 3,
+  "runtime": "nodejs",
+  "platforms": [
+    "local"
+  ],
+  "brandColor": "#6049AD",
+  "name": {
+    "en": "Toniebox 2"
+  },
+  "description": {
+    "en": "Night mode, playback controls, and listening automations for Toniebox 2."
+  },
+  "author": {
+    "name": "Kamil Jopek",
+    "email": "kjopek@users.noreply.github.com"
+  },
+  "category": [
+    "music"
+  ],
+  "permissions": [],
+  "images": {
+    "small": "/assets/images/small.png",
+    "large": "/assets/images/large.png",
+    "xlarge": "/assets/images/xlarge.png"
+  },
+  "capabilities": {
+    "night_mode": {
+      "type": "boolean",
+      "title": {
+        "en": "Night mode"
+      },
+      "getable": true,
+      "setable": true,
+      "uiComponent": "toggle",
+      "icon": "/assets/night.svg"
+    },
+    "toniebox_online": {
+      "type": "boolean",
+      "title": {
+        "en": "Online"
+      },
+      "getable": true,
+      "setable": false,
+      "uiComponent": "sensor",
+      "icon": "/assets/icon.svg"
+    },
+    "headphones_connected": {
+      "type": "boolean",
+      "title": {
+        "en": "Headphones connected"
+      },
+      "getable": true,
+      "setable": false,
+      "uiComponent": "sensor",
+      "icon": "/assets/icon.svg"
+    },
+    "sleep_timer_remaining": {
+      "type": "number",
+      "title": {
+        "en": "Night mode remaining"
+      },
+      "getable": true,
+      "setable": false,
+      "units": {
+        "en": "min"
+      },
+      "min": 0,
+      "decimals": 1,
+      "uiComponent": "sensor",
+      "icon": "/assets/night.svg"
+    },
+    "tonie_id": {
+      "type": "string",
+      "title": {
+        "en": "Tonie ID"
+      },
+      "getable": true,
+      "setable": false,
+      "uiComponent": "sensor",
+      "icon": "/assets/icon.svg"
+    },
+    "chapter_number": {
+      "type": "number",
+      "title": {
+        "en": "Chapter"
+      },
+      "getable": true,
+      "setable": false,
+      "min": 0,
+      "decimals": 0,
+      "uiComponent": "sensor",
+      "icon": "/assets/icon.svg"
+    },
+    "ring_brightness": {
+      "type": "number",
+      "title": {
+        "en": "Light ring"
+      },
+      "getable": true,
+      "setable": true,
+      "min": 0,
+      "max": 100,
+      "step": 1,
+      "decimals": 0,
+      "units": {
+        "en": "%"
+      },
+      "uiComponent": "slider",
+      "icon": "/assets/night.svg"
+    }
+  },
+  "flow": {
+    "actions": [
+      {
+        "id": "night_mode_on",
+        "title": {
+          "en": "Start night mode for … minutes"
+        },
+        "titleFormatted": {
+          "en": "Start night mode for [[minutes]] minutes"
+        },
+        "hint": {
+          "en": "Starts the native sleep timer with light using the box’s bedtime light and volume settings; requires an online box."
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          },
+          {
+            "name": "minutes",
+            "type": "number",
+            "title": {
+              "en": "Minutes"
+            },
+            "min": 1,
+            "max": 720,
+            "step": 1
+          }
+        ]
+      },
+      {
+        "id": "night_mode_off",
+        "title": {
+          "en": "Stop night mode"
+        },
+        "titleFormatted": {
+          "en": "Stop night mode"
+        },
+        "hint": {
+          "en": "Cancels the native sleep-light timer, not scheduled sunrise alarms."
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "night_light",
+        "title": {
+          "en": "Set night light to … at …%"
+        },
+        "titleFormatted": {
+          "en": "Set night light to [[color]] at [[brightness]]%"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          },
+          {
+            "name": "color",
+            "type": "text",
+            "title": {
+              "en": "Hex color (#ff8800)"
+            }
+          },
+          {
+            "name": "brightness",
+            "type": "number",
+            "title": {
+              "en": "Brightness (%)"
+            },
+            "min": 0,
+            "max": 100,
+            "step": 1
+          }
+        ]
+      },
+      {
+        "id": "night_volume",
+        "title": {
+          "en": "Set night volume limits to …% / …%"
+        },
+        "titleFormatted": {
+          "en": "Set night volume limits to [[speaker]]% / [[headphones]]%"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          },
+          {
+            "name": "speaker",
+            "type": "number",
+            "title": {
+              "en": "Speaker limit (%)"
+            },
+            "min": 1,
+            "max": 100,
+            "step": 1
+          },
+          {
+            "name": "headphones",
+            "type": "number",
+            "title": {
+              "en": "Headphone limit (%)"
+            },
+            "min": 1,
+            "max": 100,
+            "step": 1
+          }
+        ]
+      },
+      {
+        "id": "play",
+        "title": {
+          "en": "Resume playback"
+        },
+        "titleFormatted": {
+          "en": "Resume playback"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "pause",
+        "title": {
+          "en": "Pause playback"
+        },
+        "titleFormatted": {
+          "en": "Pause playback"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "next",
+        "title": {
+          "en": "Next chapter"
+        },
+        "titleFormatted": {
+          "en": "Next chapter"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "previous",
+        "title": {
+          "en": "Previous chapter"
+        },
+        "titleFormatted": {
+          "en": "Previous chapter"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "seek",
+        "title": {
+          "en": "Go to chapter … at … seconds"
+        },
+        "titleFormatted": {
+          "en": "Go to chapter [[chapter]] at [[seconds]] seconds"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          },
+          {
+            "name": "chapter",
+            "type": "number",
+            "title": {
+              "en": "Chapter (starts at 1)"
+            },
+            "min": 1,
+            "max": 999,
+            "step": 1
+          },
+          {
+            "name": "seconds",
+            "type": "number",
+            "title": {
+              "en": "Seconds into chapter"
+            },
+            "min": 0,
+            "max": 86400,
+            "step": 1
+          }
+        ]
+      },
+      {
+        "id": "volume",
+        "title": {
+          "en": "Set playback volume to …%"
+        },
+        "titleFormatted": {
+          "en": "Set playback volume to [[percent]]%"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          },
+          {
+            "name": "percent",
+            "type": "number",
+            "title": {
+              "en": "Volume (%)"
+            },
+            "min": 0,
+            "max": 100,
+            "step": 1
+          }
+        ]
+      },
+      {
+        "id": "volume_up",
+        "title": {
+          "en": "Raise playback volume one step"
+        },
+        "titleFormatted": {
+          "en": "Raise playback volume one step"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "volume_down",
+        "title": {
+          "en": "Lower playback volume one step"
+        },
+        "titleFormatted": {
+          "en": "Lower playback volume one step"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "volume_limit",
+        "title": {
+          "en": "Set speaker volume limit to …%"
+        },
+        "titleFormatted": {
+          "en": "Set speaker volume limit to [[percent]]%"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          },
+          {
+            "name": "percent",
+            "type": "dropdown",
+            "title": {
+              "en": "Maximum volume"
+            },
+            "values": [
+              {
+                "id": "25",
+                "label": {
+                  "en": "25%"
+                }
+              },
+              {
+                "id": "50",
+                "label": {
+                  "en": "50%"
+                }
+              },
+              {
+                "id": "75",
+                "label": {
+                  "en": "75%"
+                }
+              },
+              {
+                "id": "100",
+                "label": {
+                  "en": "100%"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "ring_brightness",
+        "title": {
+          "en": "Set light ring brightness to …%"
+        },
+        "titleFormatted": {
+          "en": "Set light ring brightness to [[brightness]]%"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          },
+          {
+            "name": "brightness",
+            "type": "number",
+            "title": {
+              "en": "Brightness (%)"
+            },
+            "min": 0,
+            "max": 100,
+            "step": 1
+          }
+        ]
+      },
+      {
+        "id": "sleep_now",
+        "title": {
+          "en": "Put the Toniebox to sleep"
+        },
+        "titleFormatted": {
+          "en": "Put the Toniebox to sleep"
+        },
+        "hint": {
+          "en": "The Toniebox cannot be woken remotely; squeeze an ear to wake it."
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "refresh",
+        "title": {
+          "en": "Refresh Toniebox settings"
+        },
+        "titleFormatted": {
+          "en": "Refresh Toniebox settings"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      }
+    ],
+    "triggers": [
+      {
+        "id": "playback_started",
+        "title": {
+          "en": "Playback started"
+        },
+        "titleFormatted": {
+          "en": "Playback started"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ],
+        "tokens": [
+          {
+            "name": "tonie_id",
+            "type": "string",
+            "title": {
+              "en": "Tonie ID"
+            }
+          },
+          {
+            "name": "chapter",
+            "type": "number",
+            "title": {
+              "en": "Chapter (starts at 1)"
+            }
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "title": {
+              "en": "Track title"
+            }
+          }
+        ]
+      },
+      {
+        "id": "playback_paused",
+        "title": {
+          "en": "Playback paused"
+        },
+        "titleFormatted": {
+          "en": "Playback paused"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ],
+        "tokens": [
+          {
+            "name": "tonie_id",
+            "type": "string",
+            "title": {
+              "en": "Tonie ID"
+            }
+          },
+          {
+            "name": "chapter",
+            "type": "number",
+            "title": {
+              "en": "Chapter (starts at 1)"
+            }
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "title": {
+              "en": "Track title"
+            }
+          }
+        ]
+      },
+      {
+        "id": "playback_ended",
+        "title": {
+          "en": "Playback ended"
+        },
+        "titleFormatted": {
+          "en": "Playback ended"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ],
+        "tokens": [
+          {
+            "name": "tonie_id",
+            "type": "string",
+            "title": {
+              "en": "Tonie ID"
+            }
+          },
+          {
+            "name": "chapter",
+            "type": "number",
+            "title": {
+              "en": "Chapter (starts at 1)"
+            }
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "title": {
+              "en": "Track title"
+            }
+          }
+        ]
+      },
+      {
+        "id": "tonie_changed",
+        "title": {
+          "en": "The Tonie changed"
+        },
+        "titleFormatted": {
+          "en": "The Tonie changed"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ],
+        "tokens": [
+          {
+            "name": "tonie_id",
+            "type": "string",
+            "title": {
+              "en": "Tonie ID"
+            }
+          },
+          {
+            "name": "chapter",
+            "type": "number",
+            "title": {
+              "en": "Chapter (starts at 1)"
+            }
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "title": {
+              "en": "Track title"
+            }
+          }
+        ]
+      },
+      {
+        "id": "chapter_changed",
+        "title": {
+          "en": "The chapter changed"
+        },
+        "titleFormatted": {
+          "en": "The chapter changed"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ],
+        "tokens": [
+          {
+            "name": "tonie_id",
+            "type": "string",
+            "title": {
+              "en": "Tonie ID"
+            }
+          },
+          {
+            "name": "chapter",
+            "type": "number",
+            "title": {
+              "en": "Chapter (starts at 1)"
+            }
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "title": {
+              "en": "Track title"
+            }
+          }
+        ]
+      },
+      {
+        "id": "night_mode_started",
+        "title": {
+          "en": "Night mode started"
+        },
+        "titleFormatted": {
+          "en": "Night mode started"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "night_mode_ended",
+        "title": {
+          "en": "Night mode stopped"
+        },
+        "titleFormatted": {
+          "en": "Night mode stopped"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "sleep_timer_completed",
+        "title": {
+          "en": "The sleep timer completed"
+        },
+        "titleFormatted": {
+          "en": "The sleep timer completed"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "box_online",
+        "title": {
+          "en": "The Toniebox came online"
+        },
+        "titleFormatted": {
+          "en": "The Toniebox came online"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "box_offline",
+        "title": {
+          "en": "The Toniebox went offline"
+        },
+        "titleFormatted": {
+          "en": "The Toniebox went offline"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "headphones_changed",
+        "title": {
+          "en": "Headphone connection changed"
+        },
+        "titleFormatted": {
+          "en": "Headphone connection changed"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ],
+        "tokens": [
+          {
+            "name": "connected",
+            "type": "boolean",
+            "title": {
+              "en": "Connected"
+            }
+          }
+        ]
+      },
+      {
+        "id": "battery_low",
+        "title": {
+          "en": "Battery became low"
+        },
+        "titleFormatted": {
+          "en": "Battery became low"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ],
+        "tokens": [
+          {
+            "name": "percent",
+            "type": "number",
+            "title": {
+              "en": "Battery (%)"
+            }
+          }
+        ]
+      },
+      {
+        "id": "settings_applied",
+        "title": {
+          "en": "The Toniebox applied its settings"
+        },
+        "titleFormatted": {
+          "en": "The Toniebox applied its settings"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      }
+    ],
+    "conditions": [
+      {
+        "id": "is_playing",
+        "title": {
+          "en": "Playback !{{is|is not}} active"
+        },
+        "titleFormatted": {
+          "en": "Playback !{{is|is not}} active"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "is_online",
+        "title": {
+          "en": "The Toniebox !{{is|is not}} online"
+        },
+        "titleFormatted": {
+          "en": "The Toniebox !{{is|is not}} online"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "is_night_mode",
+        "title": {
+          "en": "Night mode !{{is|is not}} active"
+        },
+        "titleFormatted": {
+          "en": "Night mode !{{is|is not}} active"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "has_headphones",
+        "title": {
+          "en": "Headphones !{{are|are not}} connected"
+        },
+        "titleFormatted": {
+          "en": "Headphones !{{are|are not}} connected"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          }
+        ]
+      },
+      {
+        "id": "is_tonie",
+        "title": {
+          "en": "Tonie … !{{is|is not}} on the box"
+        },
+        "titleFormatted": {
+          "en": "Tonie [[tonie_id]] !{{is|is not}} on the box"
+        },
+        "args": [
+          {
+            "name": "device",
+            "type": "device",
+            "filter": "driver_id=toniebox2"
+          },
+          {
+            "name": "tonie_id",
+            "type": "text",
+            "title": {
+              "en": "Tonie ID"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "drivers": [
+    {
+      "id": "toniebox2",
+      "name": {
+        "en": "Toniebox 2"
+      },
+      "class": "speaker",
+      "platforms": [
+        "local"
+      ],
+      "connectivity": [
+        "cloud"
+      ],
+      "capabilities": [
+        "night_mode",
+        "speaker_playing",
+        "speaker_next",
+        "speaker_prev",
+        "volume_set",
+        "volume_up",
+        "volume_down",
+        "measure_battery",
+        "alarm_battery",
+        "toniebox_online",
+        "sleep_timer_remaining",
+        "speaker_track",
+        "tonie_id",
+        "chapter_number",
+        "headphones_connected",
+        "ring_brightness"
+      ],
+      "images": {
+        "small": "/assets/images/small.png",
+        "large": "/assets/images/large.png",
+        "xlarge": "/assets/images/xlarge.png"
+      },
+      "icon": "/assets/icon.svg",
+      "pair": [
+        {
+          "id": "login_credentials",
+          "template": "login_credentials"
+        },
+        {
+          "id": "list_devices",
+          "template": "list_devices",
+          "navigation": {
+            "prev": "login_credentials",
+            "next": "add_devices"
+          }
+        },
+        {
+          "id": "add_devices",
+          "template": "add_devices"
+        }
+      ],
+      "repair": [
+        {
+          "id": "login_credentials",
+          "template": "login_credentials"
+        }
+      ],
+      "settings": [
+        {
+          "id": "night_minutes",
+          "type": "number",
+          "label": {
+            "en": "Default night mode duration (minutes)"
+          },
+          "value": 30,
+          "min": 1,
+          "max": 720
+        },
+        {
+          "id": "firmware",
+          "type": "label",
+          "label": {
+            "en": "Firmware"
+          },
+          "value": "Unknown"
+        },
+        {
+          "id": "box_id",
+          "type": "label",
+          "label": {
+            "en": "Toniebox ID"
+          },
+          "value": ""
+        }
+      ]
+    }
+  ]
+}

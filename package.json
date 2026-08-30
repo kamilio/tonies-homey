@@ -1,0 +1,30 @@
+{
+  "name": "@kamilio/tonies-homey",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Toniebox 2 playback, night mode, and realtime Flow triggers for Homey",
+  "author": {
+    "name": "Kamil Jopek",
+    "email": "kjopek@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "main": "app.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs && homey app build",
+    "validate": "node scripts/build.mjs && homey app validate --level debug",
+    "test": "node --test test/*.test.js",
+    "smoke:build": "node scripts/smoke.mjs",
+    "verify": "npm test && npm run validate && npm run build && npm run smoke:build"
+  },
+  "dependencies": {
+    "@kamils-jamco/tonies-sdk": "file:vendor/kamils-jamco-tonies-sdk-0.1.0.tgz"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "homey": "4.3.1"
+  }
+}
