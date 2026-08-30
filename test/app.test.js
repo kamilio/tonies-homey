@@ -146,6 +146,16 @@ test("every advertised action maps to an implemented device method", () => {
   assert(definitions.deviceCapabilities.includes("night_mode"));
 });
 
+test("SDK installs from public HTTPS at the same pinned commit in both manifests", () => {
+  const manifest = JSON.parse(readFileSync(join(__dirname, "../package.json"), "utf8"));
+  const lock = JSON.parse(readFileSync(join(__dirname, "../package-lock.json"), "utf8"));
+  const dependency = "@kamils-jamco/tonies-sdk";
+  const source = manifest.devDependencies[dependency];
+  assert.match(source, /^git\+https:\/\/github\.com\/kamilio\/tonies-sdk\.git#[a-f0-9]{40}$/);
+  assert.equal(lock.packages[""].devDependencies[dependency], source);
+  assert.equal(lock.packages[`node_modules/${dependency}`].resolved, source);
+});
+
 test("app reuses its bundled cloud-only SDK without loading desktop modules", async () => {
   const app = new App();
   const sdk = await app.sdk();

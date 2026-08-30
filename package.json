@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Toniebox 2 playback, night mode, and realtime Flow triggers for Homey",
+  "repository": { "type": "git", "url": "git+https://github.com/kamilio/tonies-homey.git" },
   "author": {
     "name": "Kamil Jopek",
     "email": "kjopek@users.noreply.github.com"
@@ -25,7 +26,7 @@
     "mqtt": "^5.15.2"
   },
   "devDependencies": {
-    "@kamils-jamco/tonies-sdk": "file:vendor/kamils-jamco-tonies-sdk-0.1.0.tgz",
+    "@kamils-jamco/tonies-sdk": "git+https://github.com/kamilio/tonies-sdk.git#b4ffb2e60e990a6d416bb5315dcbd393c44deab0",
     "@resvg/resvg-js": "^2.6.2",
     "esbuild": "^0.28.2",
     "homey": "4.3.1"

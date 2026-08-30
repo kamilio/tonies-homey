@@ -1,6 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { Resvg } from "@resvg/resvg-js";
@@ -9,9 +8,11 @@ import definitions from "../lib/definitions.js";
 
 export async function build() {
   const root = dirname(dirname(fileURLToPath(import.meta.url)));
-  const vendor = JSON.parse(await readFile(join(root, "vendor/sdk.json"), "utf8"));
-  const archive = await readFile(join(root, "vendor", vendor.archive));
-  assert.equal(`sha512-${createHash("sha512").update(archive).digest("base64")}`, vendor.integrity, "Vendored SDK differs from the pinned source revision");
+  const manifestSource = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+  const lock = JSON.parse(await readFile(join(root, "package-lock.json"), "utf8"));
+  const sdkSource = manifestSource.devDependencies["@kamils-jamco/tonies-sdk"];
+  assert.match(sdkSource, /^git\+https:\/\/github\.com\/kamilio\/tonies-sdk\.git#[a-f0-9]{40}$/, "SDK must use a commit-pinned public GitHub URL");
+  assert.equal(lock.packages["node_modules/@kamils-jamco/tonies-sdk"].resolved, sdkSource, "SDK lockfile must match the pinned GitHub source");
   const runtime = await bundle({
     absWorkingDir: root,
     stdin: {

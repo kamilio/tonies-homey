@@ -8,13 +8,13 @@ Use the **Night mode** tile or the **Start night mode for … minutes** Flow act
 
 Stopping night mode cancels the sleep-light timer, not scheduled sunrise alarms or every possible bedtime routine. The box must be awake and online. A sleeping box cannot be woken via the cloud; squeeze an ear to wake it. There is no invented remote-wake action.
 
-Night-mode actions require a fresh, non-retained bedtime reply with the requested state and duration, even when the cached timer state already matches. Listening starts before publishing, so a reply arriving before the broker acknowledgment is not missed; unrelated telemetry cannot falsely confirm a timer command. A lost broker connection cancels pending confirmation, and overlapping night-mode actions are rejected rather than attributing one uncorrelated reply to multiple commands.
+Starting night mode requires a fresh, non-retained bedtime reply with the requested state and duration, even when the cached timer state already matches. Stopping an already-confirmed-off timer is a no-op. Listening starts before publishing, so a reply arriving before the broker acknowledgment is not missed; unrelated telemetry cannot falsely confirm a timer command. A lost broker connection cancels pending confirmation. Homey serializes night actions in a separate bounded queue so one uncorrelated reply cannot confirm overlapping commands.
 
 A confirmation timeout also cancels its pending SDK command, including one waiting for initial telemetry or broker acknowledgment, so the action cannot silently send a delayed night-mode command after reporting failure. Cancellation cannot undo an action the box has already processed.
 
 ## Playback and automations
 
-The device supports play/pause, next/previous chapter, seek, volume, volume steps, speaker volume limits, light-ring brightness, and immediate sleep. Volume percentages map to the box's 14 discrete levels; volume limits are separate from current volume. Homey chapter numbers start at 1.
+The device supports play/pause, next/previous chapter, chapter selection, volume, volume steps, speaker volume limits, light-ring brightness, and immediate sleep. Volume percentages map to the box's 14 discrete levels; volume limits are separate from current volume. Homey chapter numbers start at 1. Precise time seeking is not supported: the box tested on August 30, 2026 restarted the selected chapter instead of honoring a nonzero offset.
 
 Flow triggers include playback started/paused/ended, chapter or Tonie changes, night mode started/stopped, timer completed, online/offline, low battery, headphone connection changes, and settings applied. Retained snapshots and duplicate packets do not fire spurious playback-start triggers when the app restarts. Conditions expose playing, online, night mode, headphones, and a specific Tonie ID.
 
@@ -28,9 +28,9 @@ Concurrent settings refreshes share one request, and countdown ticks share one w
 
 The realtime SDK maintains credentials independently of settings polling, using one non-overlapping check every 30 seconds and no HTTP request while instance tokens remain valid. Rotated tokens are available to automatic MQTT reconnects. Next/previous and volume-step actions fail promptly when the broker or box goes offline rather than waiting for unavailable telemetry.
 
-## Development
+## Installation and packaging
 
-The pinned SDK tarball in `vendor/` comes from `kamilio/tonies-sdk` and is a development dependency. The build generates `lib/tonies-sdk.js` from only its cloud/realtime entry points, leaving MQTT as the sole direct production dependency; desktop storage, CLI tooling, and audio parsers are not deployed. This generated runtime is committed so direct Homey CLI builds work too. CI verifies regeneration leaves it unchanged. Run `npm ci`, `npm test`, `npm run validate`, and `npm run build`. Use the official Homey CLI `homey app run` to test on your own Homey Pro. No Homey installation or App Store submission occurs just by building or pushing this repository.
+The SDK comes directly from the public `kamilio/tonies-sdk` GitHub repository, pinned to a full commit in `package.json` and `package-lock.json`; no SDK package publication or private archive is required. npm prepares the SDK from source during installation. The app bundles only its cloud/realtime entry points, leaving MQTT as the sole direct production dependency; desktop storage, CLI tooling, and audio parsers are not deployed. Follow the [installation steps](README.md#install-from-github) to install on your Homey Pro. Building or pushing this repository does not install the app on a hub or publish it to the App Store.
 
 `npm run test:memory` runs the regressions with explicit garbage collection, including a 20,000-snapshot burst, a retained-heap bound, capability-write counts, and repeated initialization/teardown. Timing diagnostics describe the machine running the test, not Homey hardware performance.
 
