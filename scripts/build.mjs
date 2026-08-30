@@ -37,7 +37,16 @@ export async function build() {
   ], "Homey must bundle only the SDK cloud and realtime modules");
   await writeFile(join(root, "lib/tonies-sdk.js"), runtime.outputFiles[0].contents);
   const { actions, triggers, conditions, capabilities, deviceCapabilities, flowCard } = definitions;
-  const login = { id: "login_credentials", template: "login_credentials" };
+  const login = {
+    id: "login_credentials", template: "login_credentials",
+    options: {
+      title: { en: "Sign in to your Tonies account" },
+      usernameLabel: { en: "Tonies email address" },
+      usernamePlaceholder: { en: "you@example.com" },
+      passwordLabel: { en: "Tonies password" },
+      passwordPlaceholder: { en: "Password used in the Tonies app" }
+    }
+  };
   const images = { small: "/assets/images/small.png", large: "/assets/images/large.png", xlarge: "/assets/images/xlarge.png" };
   const manifest = {
     id: "com.kjopek.tonies", version: manifestSource.version, compatibility: ">=12.9.0", sdk: 3,
@@ -50,8 +59,9 @@ export async function build() {
     drivers: [{
       id: "toniebox2", name: { en: "Toniebox 2" }, class: "speaker", platforms: ["local"], connectivity: ["cloud"],
       capabilities: deviceCapabilities, images, icon: "/drivers/toniebox2/assets/icon.svg",
+      energy: { batteries: ["INTERNAL"] },
       pair: [login, { id: "list_devices", template: "list_devices", navigation: { prev: "login_credentials", next: "add_devices" } }, { id: "add_devices", template: "add_devices" }],
-      repair: [login],
+      repair: [{ ...login, options: { ...login.options, title: { en: "Reconnect your Tonies account" } } }],
       settings: [
         { id: "night_minutes", type: "number", label: { en: "Default night mode duration (minutes)" }, value: 30, min: 1, max: 720 },
         { id: "firmware", type: "label", label: { en: "Firmware" }, value: "Unknown" },

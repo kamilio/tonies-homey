@@ -1,6 +1,6 @@
 {
   "id": "com.kjopek.tonies",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "compatibility": ">=12.9.0",
   "sdk": 3,
   "runtime": "nodejs",
@@ -961,10 +961,32 @@
         "xlarge": "/assets/images/xlarge.png"
       },
       "icon": "/drivers/toniebox2/assets/icon.svg",
+      "energy": {
+        "batteries": [
+          "INTERNAL"
+        ]
+      },
       "pair": [
         {
           "id": "login_credentials",
-          "template": "login_credentials"
+          "template": "login_credentials",
+          "options": {
+            "title": {
+              "en": "Sign in to your Tonies account"
+            },
+            "usernameLabel": {
+              "en": "Tonies email address"
+            },
+            "usernamePlaceholder": {
+              "en": "you@example.com"
+            },
+            "passwordLabel": {
+              "en": "Tonies password"
+            },
+            "passwordPlaceholder": {
+              "en": "Password used in the Tonies app"
+            }
+          }
         },
         {
           "id": "list_devices",
@@ -982,7 +1004,24 @@
       "repair": [
         {
           "id": "login_credentials",
-          "template": "login_credentials"
+          "template": "login_credentials",
+          "options": {
+            "title": {
+              "en": "Reconnect your Tonies account"
+            },
+            "usernameLabel": {
+              "en": "Tonies email address"
+            },
+            "usernamePlaceholder": {
+              "en": "you@example.com"
+            },
+            "passwordLabel": {
+              "en": "Tonies password"
+            },
+            "passwordPlaceholder": {
+              "en": "Password used in the Tonies app"
+            }
+          }
         }
       ],
       "settings": [

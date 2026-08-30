@@ -1,6 +1,6 @@
 {
   "name": "@kamilio/tonies-homey",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Toniebox 2 playback, night mode, and realtime Flow triggers for Homey",
   "repository": { "type": "git", "url": "git+https://github.com/kamilio/tonies-homey.git" },

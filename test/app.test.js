@@ -398,6 +398,83 @@ test("repair adopts credentials into an account still connecting", async () => {
   assert.equal(app.clients.size, 0);
 });
 
+test("Homey renews expired and rejected tokens, refreshes while idle, and persists reconnect credentials", async context => {
+  context.mock.timers.enable({ apis: ["Date", "setInterval"], now: Date.now() });
+  const app = new App();
+  const sdk = require("../lib/tonies-sdk");
+  const stored = new Map([["tonies.auth.account", { accessToken: "expired", refreshToken: "refresh-0", expiresAt: Date.now() - 1000 }]]);
+  const refreshTokens = [];
+  const requests = [];
+  const sockets = [];
+  const errors = [];
+  const device = {};
+  let rejectedToken;
+  app.accounts = new Map();
+  app.connecting = new Map();
+  app.error = error => errors.push(error);
+  app.homey = { settings: { get: key => stored.get(key), set: (key, value) => stored.set(key, value) } };
+  const fetch = async (url, options) => {
+    if (url.includes("openid-connect/token")) {
+      assert.equal(options.body.get("grant_type"), "refresh_token");
+      assert.equal(options.body.has("password"), false);
+      refreshTokens.push(options.body.get("refresh_token"));
+      return Response.json({ access_token: `access-${refreshTokens.length}`, refresh_token: `refresh-${refreshTokens.length}`, expires_in: 60 });
+    }
+    requests.push(options.headers.Authorization);
+    if (options.headers.Authorization === `Bearer ${rejectedToken}`) return new Response(null, { status: 401 });
+    if (url.endsWith("/graphql")) return Response.json({ data: { households: [{ id: box.householdId, tonieboxes: [{ ...box, macAddress: "aabbccddeeff" }] }] } });
+    assert(url.endsWith("/me"));
+    return Response.json({ uuid: "account" });
+  };
+  app.getToniesSdk = async () => ({
+    ...sdk,
+    TonieCloudClient: class extends sdk.TonieCloudClient {
+      constructor(options) { super({ ...options, fetch }); }
+    },
+    ToniesRealtime: class extends sdk.ToniesRealtime {
+      constructor(cloud) {
+        super(cloud, { connect: async (url, options) => {
+          const socket = new EventEmitter();
+          socket.options = options;
+          socket.connected = true;
+          socket.subscribeAsync = async () => [];
+          socket.endAsync = async () => { socket.connected = false; };
+          sockets.push(socket);
+          return socket;
+        } });
+      }
+    }
+  });
+  context.after(async () => { if (app.accounts.has("account")) await app.releaseAccount("account", device); });
+  const account = await app.getAccount("account", device);
+  assert.deepEqual(refreshTokens, ["refresh-0"]);
+  assert(requests.every(token => token === "Bearer access-1"));
+  assert.equal(stored.get("tonies.auth.account").refreshToken, "refresh-1");
+  assert.equal(sockets[0].options.password, "access-1");
+
+  const requestCount = requests.length;
+  context.mock.timers.tick(60000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(refreshTokens, ["refresh-0", "refresh-1"]);
+  assert.equal(requests.length, requestCount);
+  assert.equal(stored.get("tonies.auth.account").refreshToken, "refresh-2");
+  assert.equal(sockets[0].options.password, "access-2");
+
+  rejectedToken = "access-2";
+  await Promise.all(Array.from({ length: 10 }, () => account.cloud.request("GET", "/me")));
+  assert.deepEqual(refreshTokens, ["refresh-0", "refresh-1", "refresh-2"]);
+  assert.equal(stored.get("tonies.auth.account").refreshToken, "refresh-3");
+  assert.equal(sockets[0].options.password, "access-3");
+  await app.releaseAccount("account", device);
+  assert.equal(account.cloud.listenerCount("auth"), 0);
+  const replacement = await app.getAccount("account", device);
+  assert.notEqual(replacement.cloud, account.cloud);
+  assert.equal(replacement.cloud.auth.refreshToken, "refresh-3");
+  assert.equal(sockets[1].options.password, "access-3");
+  assert.equal(refreshTokens.length, 3);
+  assert.deepEqual(errors, []);
+});
+
 test("account teardown preserves an in-flight refresh before opening its replacement", async () => {
   const app = new App();
   const { TonieCloudClient } = require("../lib/tonies-sdk");

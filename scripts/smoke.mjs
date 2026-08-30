@@ -23,6 +23,13 @@ async function smokeRuntime(built) {
   assert.equal(manifest.drivers[0].id, "toniebox2");
   assert.equal(manifest.version, JSON.parse(await readFile(join(built, "package.json"), "utf8")).version);
   assert.equal(manifest.drivers[0].icon, "/drivers/toniebox2/assets/icon.svg");
+  assert.deepEqual(manifest.drivers[0].energy.batteries, ["INTERNAL"]);
+  for (const flow of ["pair", "repair"]) {
+    const login = manifest.drivers[0][flow].find(view => view.template === "login_credentials");
+    assert.match(login.options.title.en, /your Tonies account/);
+    assert.equal(login.options.usernameLabel.en, "Tonies email address");
+    assert.equal(login.options.passwordLabel.en, "Tonies password");
+  }
   for (const iconPath of ["/assets/icon.svg", manifest.drivers[0].icon, ...Object.values(manifest.capabilities).map(capability => capability.icon).filter(Boolean)]) {
     const icon = await readFile(join(built, iconPath), "utf8");
     assert.match(icon, /<svg\b[^>]*viewBox="[^"]+"/);

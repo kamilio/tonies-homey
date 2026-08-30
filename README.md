@@ -50,6 +50,8 @@ Homey's CLI prompts you to sign in and select your hub. The app's SDK dependency
 
 Only rotating account tokens are retained in app settings, not your password. Boxes on the same account share a session. If sign-in stops working later, use the device's repair flow to sign in again.
 
+**You do not need to sign in again when an access token expires.** The app renews it automatically using the refresh token, persists rotated tokens, and updates the credentials used for MQTT reconnects—even while idle. A rejected API access token is refreshed and the request retried once. If Tonies expires or revokes the refresh token itself, use **Repair** to reconnect your Tonies account; the app deliberately does not retain your password to log in again silently.
+
 ## Night mode, first
 
 The **Night mode** tile starts the box's native **sleep timer with light**. Its default duration is **30 minutes**, configurable in device settings; Flow actions accept **1–720 minutes**.
