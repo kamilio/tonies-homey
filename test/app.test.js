@@ -31,12 +31,16 @@ async function fixture(options = {}) {
   const listeners = new Map();
   const triggers = [];
   const controls = [];
+  const confirmations = [];
   const timers = new Set();
   const errors = [];
   const realtime = new EventEmitter({ captureRejections: true });
   realtime.on("error", error => errors.push(error));
   realtime.states = new Map();
-  realtime.waitForState = async () => ({});
+  realtime.withConfirmation = async (boxId, topic, predicate, operation) => {
+    confirmations.push({ boxId, topic, predicate });
+    return operation();
+  };
   for (const method of ["play", "pause", "skip", "changeVolume", "setVolume", "sleepTimer", "seek", "sleep"]) realtime[method] = async (...args) => { controls.push({ method, args }); return { acknowledged: true, deviceConfirmed: false }; };
   const account = { realtime, boxes: [box], devices: new Set(), cloud: {
     getToniebox: async () => box,
@@ -56,6 +60,7 @@ async function fixture(options = {}) {
   device.getStoreValue = () => "account";
   device.getSetting = () => 30;
   device.getCapabilityValue = name => values.get(name);
+  device.getAvailable = () => device.available;
   device.setCapabilityValue = async (name, value) => values.set(name, value);
   device.setSettings = async () => {};
   device.setAvailable = async () => { device.available = true; };
@@ -72,7 +77,7 @@ async function fixture(options = {}) {
     await device.metadataPending;
     await device.pending;
   };
-  return { device, account, values, listeners, triggers, controls, timers, send, emit, errors };
+  return { device, account, values, listeners, triggers, controls, confirmations, timers, send, emit, errors };
 }
 
 test("every advertised action maps to an implemented device method", () => {
@@ -263,7 +268,7 @@ test("repair adopts credentials into an account still connecting", async () => {
 });
 
 test("night-mode toggle and Flow controls send native timer commands and reject bad values", async () => {
-  const { device, controls, listeners, values } = await fixture();
+  const { device, controls, confirmations, listeners, values } = await fixture();
   await listeners.get("night_mode")(true);
   await listeners.get("night_mode")(false);
   await device.nightModeOn({ minutes: 45 });
@@ -271,6 +276,10 @@ test("night-mode toggle and Flow controls send native timer commands and reject 
     ["sleepTimer", "TB2", 1800], ["sleepTimer", "TB2", 0], ["sleepTimer", "TB2", 2700]
   ]);
   assert.equal(values.get("night_mode"), undefined);
+  assert(confirmations.every(item => item.boxId === "TB2" && item.topic === "app-reply/bedtime-state"));
+  assert.equal(confirmations[0].predicate({ bedtime: { stl: { state: "on" } } }), true);
+  assert.equal(confirmations[1].predicate({ bedtime: { stl: { state: "on" } } }), false);
+  assert.equal(confirmations[1].predicate({ bedtime: { stl: { state: "off" } } }), true);
   assert.throws(() => device.nightModeOn({ minutes: 0 }));
   assert.throws(() => device.nightModeOn({ minutes: NaN }));
   await device.onUninit();
@@ -529,4 +538,80 @@ test("50 initialize/uninitialize cycles release every listener and timer", async
     assert.equal(timers.size, 0);
     assert.equal(account.devices.size, 0);
   }
+});
+
+test("valid state restores availability after a transient SDK error", async () => {
+  const { device, send } = await fixture();
+  const state = { onlineState: "connected", volume: { level: 3 } };
+  await send("volume/state", state, {}, true);
+  await device.setUnavailable("Temporary metadata failure");
+  await send("volume/state", state, state);
+  assert.equal(device.available, true);
+  await device.onUninit();
+});
+
+test("broker loss clears stale night-mode and headphone conditions", async () => {
+  const { device, send, values, triggers } = await fixture();
+  const state = { onlineState: "connected", bedtime: { stl: { state: "on" } }, headphones: { connected: ["headphones"] } };
+  await send("app-reply/bedtime-state", state, {}, true);
+  assert.equal(values.get("night_mode"), true);
+  assert.equal(values.get("headphones_connected"), true);
+  await send("connection", { onlineState: "unknown" }, state, true);
+  assert.equal(values.get("night_mode"), null);
+  assert.equal(values.get("headphones_connected"), null);
+  assert.equal(values.get("sleep_timer_remaining"), null);
+  assert.equal(triggers.length, 0);
+  await device.onUninit();
+});
+
+test("periodic refresh failures use the existing error channel instead of unhandled promises", async () => {
+  const { device, account, timers, errors } = await fixture();
+  account.cloud.getToniebox = async () => { throw new Error("refresh unavailable"); };
+  const refresh = [...timers][0];
+  assert.equal(refresh(), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /refresh unavailable/);
+  account.cloud.getToniebox = async () => box;
+  refresh();
+  await device.refreshing;
+  await device.onUninit();
+});
+
+test("countdown ticks share one write and catch up to the latest timer state", async () => {
+  const { device, values, timers } = await fixture();
+  const blocked = deferred();
+  let writes = 0;
+  device.setCapabilityValue = async (name, value) => { writes++; await blocked.promise; values.set(name, value); };
+  device.sleepTimer = { state: "on", until: Date.now() / 1000 + 1800 };
+  const countdown = [...timers][1];
+  for (let index = 0; index < 1000; index++) countdown();
+  assert.equal(writes, 1);
+  device.sleepTimer = { state: "off" };
+  blocked.resolve();
+  await device.countdownPending;
+  assert.equal(writes, 2);
+  assert.equal(values.get("sleep_timer_remaining"), 0);
+  await device.onUninit();
+});
+
+test("shutdown drains other workers even when one worker fails", async () => {
+  const { device, account, emit } = await fixture();
+  const metadata = deferred();
+  const settings = deferred();
+  account.cloud.playbackInfo = () => metadata.promise;
+  account.cloud.getToniebox = () => settings.promise;
+  emit("playback/state", { onlineState: "connected", playback: { tonie: "TONIE", chapter: 0, paused: true } }, {}, true);
+  const refresh = assert.rejects(device.refresh(), /settings failed/);
+  let stopped = false;
+  const stopping = assert.rejects(device.onUninit(), /settings failed/).then(() => { stopped = true; });
+  settings.reject(new Error("settings failed"));
+  await refresh;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stopped, false);
+  assert.equal(account.devices.size, 1);
+  metadata.resolve({ title: "Old result" });
+  await stopping;
+  assert.equal(account.devices.size, 0);
+  assert.equal(account.realtime.listenerCount("state"), 0);
 });

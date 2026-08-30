@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
 const Homey = require("homey");
 
 class TonieboxDevice extends Homey.Device {
@@ -32,6 +33,13 @@ class TonieboxDevice extends Homey.Device {
     this.account.devices.add(this);
     this.sdk = await this.homey.app.sdk();
     if (this.closed) return;
+    const lifecycle = this.lifecycle;
+    this.tasks = new EventEmitter({ captureRejections: true });
+    this.tasks.on("error", error => {
+      if (!this.closed && this.lifecycle === lifecycle) this.account.realtime.emit("error", error);
+    });
+    this.tasks.on("refresh", () => { if (!this.refreshing) return this.refresh(); });
+    this.tasks.on("countdown", () => { if (!this.countdownPending) return this.updateCountdown(); });
     this.stateEvents = [];
     this.pending = undefined;
     this.stateListener = event => event.boxId === this.box.id ? this.queueState(event) : undefined;
@@ -54,8 +62,8 @@ class TonieboxDevice extends Homey.Device {
       this.queueMetadata(state)
     ]);
     if (this.closed) return;
-    this.refreshTimer = this.homey.setInterval(() => this.refresh(), 60000);
-    this.countdownTimer = this.homey.setInterval(() => this.updateCountdown(), 15000);
+    this.refreshTimer = this.homey.setInterval(() => this.tasks.emit("refresh"), 60000);
+    this.countdownTimer = this.homey.setInterval(() => this.tasks.emit("countdown"), 15000);
   }
 
   async refresh() {
@@ -154,7 +162,7 @@ class TonieboxDevice extends Homey.Device {
     if (state.onlineState !== undefined) {
       const online = state.onlineState === "connected";
       await this.setValue("toniebox_online", online);
-      if (this.online !== online && !this.closed) {
+      if ((this.online !== online || this.getAvailable() !== online) && !this.closed) {
         if (online) await this.setAvailable();
         else await this.setUnavailable("Toniebox is sleeping or offline; squeeze an ear to wake it");
         this.online = online;
@@ -164,6 +172,10 @@ class TonieboxDevice extends Homey.Device {
         await this.setValue("tonie_id", "");
         await this.setValue("speaker_track", "");
         await this.setValue("chapter_number", 0);
+        this.sleepTimer = undefined;
+        await this.setValue("night_mode", null);
+        await this.setValue("headphones_connected", null);
+        await this.updateCountdown();
       }
     }
     if (state.battery?.percent !== undefined) {
@@ -171,7 +183,7 @@ class TonieboxDevice extends Homey.Device {
       await this.setValue("alarm_battery", state.battery.percent <= 20);
     }
     if (typeof state.volume?.level === "number") await this.setValue("volume_set", state.volume.level / 13);
-    if (state.headphones) await this.setValue("headphones_connected", this.headphonesConnected(state));
+    if (state.headphones && state.onlineState === "connected") await this.setValue("headphones_connected", this.headphonesConnected(state));
     if (state.playback && state.onlineState === "connected") {
       const playback = state.playback;
       await this.setValue("speaker_playing", state.onlineState === "connected" && this.sdk.isPlaying(playback));
@@ -179,7 +191,7 @@ class TonieboxDevice extends Homey.Device {
       await this.setValue("chapter_number", Number.isInteger(playback.chapter) ? playback.chapter + 1 : 0);
       await this.setValue("speaker_track", this.trackTitle(state));
     }
-    if (state.bedtime?.stl) {
+    if (state.bedtime?.stl && state.onlineState === "connected") {
       await this.setValue("night_mode", state.bedtime.stl.state === "on");
       this.sleepTimer = state.bedtime.stl;
       await this.updateCountdown();
@@ -216,11 +228,19 @@ class TonieboxDevice extends Homey.Device {
     return state.headphones?.speaker?.output === false || (Array.isArray(state.headphones?.connected) && state.headphones.connected.length > 0);
   }
 
-  async updateCountdown() {
+  updateCountdown() {
     if (this.closed) return;
-    const timer = this.sleepTimer;
-    const remaining = timer?.state === "on" ? (typeof timer.until === "number" ? Math.max(0, (timer.until * 1000 - Date.now()) / 60000) : null) : 0;
-    await this.setValue("sleep_timer_remaining", remaining === null ? null : Math.round(remaining * 10) / 10);
+    this.countdownPending ??= this.applyCountdown().finally(() => { this.countdownPending = undefined; });
+    return this.countdownPending;
+  }
+
+  async applyCountdown() {
+    while (!this.closed) {
+      const timer = this.sleepTimer;
+      const remaining = !timer ? null : timer.state === "on" ? (typeof timer.until === "number" ? Math.max(0, (timer.until * 1000 - Date.now()) / 60000) : null) : 0;
+      await this.setValue("sleep_timer_remaining", remaining === null ? null : Math.round(remaining * 10) / 10);
+      if (timer === this.sleepTimer) return;
+    }
   }
 
   trigger(id, tokens = {}) { return this.homey.flow.getDeviceTriggerCard(id).trigger(this, tokens, {}); }
@@ -231,13 +251,17 @@ class TonieboxDevice extends Homey.Device {
   volumeUp() { return this.account.realtime.changeVolume(this.box.id, 1); }
   volumeDown() { return this.account.realtime.changeVolume(this.box.id, -1); }
   sleepNow() { return this.account.realtime.sleep(this.box.id); }
-  nightModeOff() {
-    return this.account.realtime.sleepTimer(this.box.id, 0).then(() => this.account.realtime.waitForState(this.box.id, state => state.bedtime?.stl?.state === "off"));
-  }
+  nightModeOff() { return this.nightMode(0); }
 
   nightModeOn({ minutes }) {
     assert(Number.isFinite(minutes) && minutes >= 1 && minutes <= 720, "Night mode duration must be 1–720 minutes");
-    return this.account.realtime.sleepTimer(this.box.id, Math.round(minutes * 60)).then(() => this.account.realtime.waitForState(this.box.id, state => state.bedtime?.stl?.state === "on"));
+    return this.nightMode(Math.round(minutes * 60));
+  }
+
+  nightMode(seconds) {
+    const state = seconds > 0 ? "on" : "off";
+    return this.account.realtime.withConfirmation(this.box.id, "app-reply/bedtime-state", reply => reply.bedtime?.stl?.state === state,
+      () => this.account.realtime.sleepTimer(this.box.id, seconds));
   }
 
   setVolume({ percent }) {
@@ -285,11 +309,16 @@ class TonieboxDevice extends Homey.Device {
     this.stateEvents = [];
     if (this.refreshTimer) this.homey.clearInterval(this.refreshTimer);
     if (this.countdownTimer) this.homey.clearInterval(this.countdownTimer);
+    this.tasks?.removeAllListeners("refresh");
+    this.tasks?.removeAllListeners("countdown");
     if (this.stateListener) this.account?.realtime.off("state", this.stateListener);
     if (this.metadataListener) this.account?.realtime.off("state", this.metadataListener);
+    const pending = [this.initializing, this.pending, this.metadataPending, this.refreshing, this.countdownPending];
+    const drained = Promise.allSettled(pending);
     try {
-      await Promise.all([this.initializing, this.pending, this.metadataPending, this.refreshing]);
+      await Promise.all(pending);
     } finally {
+      await drained;
       this.metadataCache?.clear();
       this.metadataTarget = undefined;
       this.latestState = undefined;
