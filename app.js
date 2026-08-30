@@ -7,6 +7,7 @@ const { actions, conditions } = require("./lib/definitions");
 class ToniesApp extends Homey.App {
   clients = new Map();
   closing = new Map();
+  signIns = new WeakMap();
 
   async onInit() {
     this.accounts = new Map();
@@ -36,7 +37,10 @@ class ToniesApp extends Homey.App {
     assert(boxes.length, "No Toniebox 2 devices were found; original Tonieboxes and Toniebox Lite are not supported");
     if (this.closing.has(accountId)) await this.closing.get(accountId);
     const existing = this.clients.get(accountId);
-    if (existing) await existing.setAuth(cloud.auth);
+    if (existing) {
+      this.signIns.set(existing, {});
+      await existing.setAuth(cloud.auth);
+    }
     else this.homey.settings.set(`tonies.auth.${accountId}`, cloud.auth);
     return { accountId, boxes };
   }
@@ -91,6 +95,20 @@ class ToniesApp extends Homey.App {
     if (account.devices.size) return;
     this.accounts.delete(accountId);
     await this.closeAccount(accountId, account, deleted);
+  }
+
+  async forgetDevice(device) {
+    const accountId = device.accountId ?? device.getStoreValue("accountId");
+    const cloud = device.account?.cloud;
+    const signIn = cloud && this.signIns.get(cloud);
+    const key = `tonies.auth.${accountId}`;
+    const initialToken = this.homey.settings.get(key)?.refreshToken;
+    await device.onUninit();
+    if (device.driver.getDevices().some(other => other !== device && other.getStoreValue("accountId") === accountId)) return;
+    if (this.clients.has(accountId) || this.connecting.has(accountId) || this.closing.has(accountId)) return;
+    if (cloud && this.signIns.get(cloud) !== signIn) return;
+    const token = cloud?.auth?.refreshToken ?? initialToken;
+    if (token && this.homey.settings.get(key)?.refreshToken === token) this.homey.settings.unset(key);
   }
 
   async closeAccount(accountId, account, deleted = false) {

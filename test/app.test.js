@@ -116,6 +116,30 @@ async function realtimeFixture(context) {
   return { ...setup, realtime, socket, send };
 }
 
+async function managedFixture() {
+  const setup = await fixture();
+  const { device, account } = setup;
+  const app = new App();
+  const stored = new Map([["tonies.auth.account", { refreshToken: "old-refresh" }]]);
+  account.cloud.auth = stored.get("tonies.auth.account");
+  account.cloud.setAuth = async auth => { account.cloud.auth = auth; stored.set("tonies.auth.account", auth); };
+  account.cloud.flushAuth = async () => {};
+  account.realtime.disconnect = async () => {};
+  app.clients.set("account", account.cloud);
+  app.accounts = new Map([["account", account]]);
+  app.connecting = new Map();
+  device.homey.app = app;
+  device.homey.settings = { get: key => stored.get(key), set: (key, value) => stored.set(key, value), unset: key => stored.delete(key) };
+  device.driver = { getDevices: () => [device] };
+  app.homey = device.homey;
+  app.sdk = async () => ({ isToniebox2: value => value.product === "tb2", TonieCloudClient: class {
+    async login() { this.auth = { refreshToken: "repaired" }; }
+    async request() { return { uuid: "account" }; }
+    async listTonieboxes() { return [box]; }
+  } });
+  return { ...setup, app, stored };
+}
+
 test("every advertised action maps to an implemented device method", () => {
   for (const action of definitions.actions) assert.equal(typeof Device.prototype[action.method], "function", action.id);
   for (const group of [definitions.actions, definitions.triggers, definitions.conditions]) assert.equal(new Set(group.map(card => card.id)).size, group.length);
@@ -454,6 +478,66 @@ test("a repair during teardown cannot be overwritten by the closing client's tok
   assert.equal(stored.get("tonies.auth.account").refreshToken, "repaired");
   assert.equal(app.clients.size, 0);
   assert.equal(app.closing.size, 0);
+});
+
+test("device deletion cannot erase a fresh sign-in waiting for old credentials to drain", async () => {
+  const { device, account, app, stored } = await managedFixture();
+  const pending = deferred();
+  const flushing = deferred();
+  account.cloud.flushAuth = async () => { flushing.resolve(); await pending.promise; };
+  const deleted = device.onDeleted();
+  await flushing.promise;
+  const signedIn = app.signIn("user", "password");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stored.get("tonies.auth.account").refreshToken, "old-refresh");
+  pending.resolve();
+  await Promise.all([deleted, signedIn]);
+  assert.equal(stored.get("tonies.auth.account")?.refreshToken, "repaired");
+  assert.equal(app.clients.size, 0);
+  assert.equal(app.closing.size, 0);
+});
+
+test("device deletion preserves credentials adopted while its workers are draining", async () => {
+  const { device, account, app, stored } = await managedFixture();
+  const pending = deferred();
+  device.pending = pending.promise;
+  const deleted = device.onDeleted();
+  await app.signIn("user", "password");
+  assert.equal(account.cloud.auth.refreshToken, "repaired");
+  pending.resolve();
+  await deleted;
+  assert.equal(stored.get("tonies.auth.account")?.refreshToken, "repaired");
+  assert.equal(app.clients.size, 0);
+});
+
+test("device deletion removes rotated credentials but preserves registered siblings", async () => {
+  for (const sibling of [false, true]) {
+    const { device, account, app, stored } = await managedFixture();
+    if (sibling) device.driver.getDevices = () => [device, { getStoreValue: () => "account" }];
+    account.cloud.flushAuth = () => account.cloud.setAuth({ refreshToken: "rotated" });
+    await device.onDeleted();
+    assert.equal(stored.get("tonies.auth.account")?.refreshToken, sibling ? "rotated" : undefined);
+    assert.equal(app.clients.size, 0);
+    assert.equal(app.closing.size, 0);
+  }
+});
+
+test("device deletion after prior shutdown does not erase a replacement login", async () => {
+  const { device, app, stored } = await managedFixture();
+  await device.onUninit();
+  await app.signIn("user", "password");
+  await device.onDeleted();
+  assert.equal(stored.get("tonies.auth.account")?.refreshToken, "repaired");
+});
+
+test("deletion removes unused credentials even when device initialization never acquired a client", async () => {
+  const { device, app, stored } = await managedFixture();
+  await device.onUninit();
+  device.account = undefined;
+  device.accountId = undefined;
+  await device.onDeleted();
+  assert.equal(stored.size, 0);
+  assert.equal(app.clients.size, 0);
 });
 
 test("night-mode toggle and Flow controls send native timer commands and reject bad values", async () => {

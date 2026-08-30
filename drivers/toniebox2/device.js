@@ -426,12 +426,7 @@ class TonieboxDevice extends Homey.Device {
     }
   }
 
-  async onDeleted() {
-    const accountId = this.accountId;
-    await this.onUninit();
-    const remaining = this.driver.getDevices().filter(device => device !== this && device.getStoreValue("accountId") === accountId);
-    if (!remaining.length) this.homey.settings.unset(`tonies.auth.${accountId}`);
-  }
+  onDeleted() { return this.homey.app.forgetDevice(this); }
 }
 
 module.exports = TonieboxDevice;
