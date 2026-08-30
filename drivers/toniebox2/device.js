@@ -26,6 +26,8 @@ class TonieboxDevice extends Homey.Device {
     this.metadataCache = new Map();
     this.metadataTarget = undefined;
     this.accountId = this.getStoreValue("accountId");
+    await this.setUnavailable("Waiting for Tonies realtime state");
+    if (this.closed) return;
     this.account = await this.homey.app.getAccount(this.accountId, this);
     if (this.closed) return;
     this.box = this.account.boxes.find(box => box.id === this.getData().id);

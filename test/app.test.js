@@ -144,6 +144,41 @@ test("account connection sharing deduplicates logins and releases failed initial
   assert(!app.accounts.has("other"));
 });
 
+test("an SDK error is logged without changing every device's availability", async () => {
+  const app = new App();
+  const logged = [];
+  let availabilityWrites = 0;
+  app.error = error => logged.push(error);
+  app.accounts = new Map();
+  app.connecting = new Map();
+  app.homey = { settings: { get: () => ({ refreshToken: "refresh" }) } };
+  app.sdk = async () => ({
+    isToniebox2: value => value.product === "tb2",
+    TonieCloudClient: class { async listTonieboxes() { return [box]; } async flushAuth() {} },
+    ToniesRealtime: class extends EventEmitter { async connect() {} async disconnect() {} }
+  });
+  const device = { setUnavailable: async () => { availabilityWrites++; } };
+  const sibling = { setUnavailable: async () => { availabilityWrites++; } };
+  const account = await app.getAccount("account", device);
+  await app.getAccount("account", sibling);
+  const failure = new Error("one Tonie's metadata is unavailable");
+  account.realtime.emit("error", failure);
+  account.realtime.emit("disconnected");
+  assert.equal(availabilityWrites, 0);
+  assert.deepEqual(logged, [failure]);
+  await app.releaseAccount("account", device);
+  await app.releaseAccount("account", sibling);
+});
+
+test("newly initialized devices remain unavailable until realtime state arrives", async () => {
+  const { device, send } = await fixture();
+  assert.equal(device.getAvailable(), false);
+  assert.match(device.unavailableMessage, /realtime/i);
+  await send("online-state", { onlineState: "connected" }, {}, true);
+  assert.equal(device.getAvailable(), true);
+  await device.onUninit();
+});
+
 test("pairing cannot reuse a previous login after a failed replacement", async () => {
   const driver = new Driver();
   const handlers = new Map();
@@ -430,6 +465,7 @@ test("bundled SDK confirms Homey night duration and cancels interrupted or timed
   const send = (topic, payload, retain = false) => socket.emit("message", `external/toniebox/AABBCCDDEEFF/${topic}`, Buffer.from(JSON.stringify(payload)), { retain });
   send("online-state", { onlineState: "connected" }, true);
   await device.onInit();
+  assert.equal(device.getAvailable(), true);
   let confirmed = false;
   const starting = device.nightModeOn({ minutes: 45 }).then(result => { confirmed = true; return result; });
   const settled = Promise.allSettled([starting]);
@@ -450,6 +486,7 @@ test("bundled SDK confirms Homey night duration and cancels interrupted or timed
   socket.emit("close");
   await stopped;
   await device.pending;
+  assert.equal(device.getAvailable(), false);
   assert.equal(values.get("night_mode"), null);
   await realtime.disconnect();
   socket.connected = true;
@@ -685,8 +722,10 @@ test("concurrent settings refreshes share one request and avoid late writes", as
 test("uninitialization during discovery never resurrects listeners or timers", async () => {
   const { device, account, timers } = await fixture({ initialize: false });
   const blocked = deferred();
-  device.homey.app.getAccount = async () => { await blocked.promise; account.devices.add(device); return account; };
+  const discovering = deferred();
+  device.homey.app.getAccount = async () => { discovering.resolve(); await blocked.promise; account.devices.add(device); return account; };
   const initializing = device.onInit();
+  await discovering.promise;
   const stopping = device.onUninit();
   blocked.resolve();
   await Promise.all([initializing, stopping]);
@@ -696,6 +735,21 @@ test("uninitialization during discovery never resurrects listeners or timers", a
   await device.onInit();
   assert.equal(timers.size, 2);
   await device.onUninit();
+});
+
+test("shutdown during initial availability waits never starts discovery", async () => {
+  const { device, account, timers } = await fixture({ initialize: false });
+  const blocked = deferred();
+  let discoveries = 0;
+  device.setUnavailable = () => blocked.promise;
+  device.homey.app.getAccount = async () => { discoveries++; return account; };
+  const initializing = device.onInit();
+  const stopping = device.onUninit();
+  blocked.resolve();
+  await Promise.all([initializing, stopping]);
+  assert.equal(discoveries, 0);
+  assert.equal(account.devices.size, 0);
+  assert.equal(timers.size, 0);
 });
 
 test("failed initialization releases its acquired account and state listeners", async () => {

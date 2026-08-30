@@ -70,12 +70,7 @@ class ToniesApp extends Homey.App {
     this.clients.set(accountId, cloud);
     const realtime = new ToniesRealtime(cloud);
     const account = { cloud, realtime, boxes: [], devices: new Set() };
-    realtime.on("error", error => {
-      for (const device of account.devices) device.setUnavailable(error.message);
-    });
-    realtime.on("disconnected", () => {
-      for (const device of account.devices) device.setUnavailable("Tonies realtime connection is unavailable");
-    });
+    realtime.on("error", error => this.error(error));
     let connected = false;
     try {
       account.boxes = (await cloud.listTonieboxes()).filter(isToniebox2);
