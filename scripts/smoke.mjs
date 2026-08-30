@@ -29,7 +29,7 @@ async function smokeRuntime(built) {
   assert.equal(typeof isToniebox2, "function");
   const cloud = new TonieCloudClient();
   const realtime = new ToniesRealtime(cloud);
-  for (const method of ["connect", "disconnect", "play", "pause", "seek", "skip", "setVolume", "changeVolume", "sleep", "sleepTimer", "withConfirmation"]) assert.equal(typeof realtime[method], "function", `Missing realtime SDK method: ${method}`);
+  for (const method of ["connect", "disconnect", "play", "pause", "seek", "skip", "setVolume", "changeVolume", "sleep", "sleepTimer", "withConfirmation", "withCancellation"]) assert.equal(typeof realtime[method], "function", `Missing realtime SDK method: ${method}`);
   for (const method of ["login", "setAuth", "flushAuth", "listTonieboxes", "getToniebox", "setTonieboxSettings", "playbackInfo"]) assert.equal(typeof cloud[method], "function", `Missing cloud SDK method: ${method}`);
   for (const image of Object.values(manifest.images)) await access(join(built, image));
   for (const dependency of ["@kamils-jamco/tonies-sdk/cloud", "classic-level", "toolcraft", "music-metadata", "esbuild", "yaml"]) {

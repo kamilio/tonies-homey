@@ -13,7 +13,7 @@ function load(file) {
   const path = join(__dirname, "..", file);
   const module = { exports: {} };
   const homey = { App: class {}, Driver: class {}, Device: class {} };
-  vm.runInNewContext(readFileSync(path, "utf8"), { module, require: name => name === "homey" ? homey : createRequire(path)(name), console, setTimeout }, { filename: path });
+  vm.runInNewContext(readFileSync(path, "utf8"), { module, require: name => name === "homey" ? homey : createRequire(path)(name), console, setTimeout, AbortController }, { filename: path });
   return module.exports;
 }
 
@@ -37,6 +37,7 @@ async function fixture(options = {}) {
   const realtime = new EventEmitter({ captureRejections: true });
   realtime.on("error", error => errors.push(error));
   realtime.states = new Map();
+  realtime.withCancellation = async (signal, operation) => { signal.throwIfAborted(); return operation(signal); };
   realtime.withConfirmation = async (boxId, topic, predicate, operation) => {
     confirmations.push({ boxId, topic, predicate });
     return operation();
@@ -441,6 +442,50 @@ test("night-mode toggle and Flow controls send native timer commands and reject 
   await device.onUninit();
 });
 
+test("Homey bounds pending controls and drains cancelled work before releasing its account", async () => {
+  const { device, account } = await fixture();
+  const blocked = deferred();
+  const operations = Array.from({ length: 32 }, () => device.control(async signal => { await blocked.promise; signal.throwIfAborted(); }));
+  const results = Promise.allSettled(operations);
+  assert.equal(device.controls.size, 32);
+  assert.throws(() => device.pause(), /At most 32/);
+  let stopped = false;
+  const stopping = device.onUninit().then(() => { stopped = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stopped, false);
+  assert.equal(account.devices.size, 1);
+  assert(device.controlController.signal.aborted);
+  blocked.resolve();
+  await stopping;
+  assert((await results).every(result => result.status === "rejected" && result.reason.name === "AbortError"));
+  assert.equal(device.controls.size, 0);
+  assert.equal(account.devices.size, 0);
+  assert.throws(() => device.pause(), /not ready/);
+  await device.onInit();
+  assert.equal(device.controlController.signal.aborted, false);
+  await device.pause();
+  await device.onUninit();
+});
+
+test("shutdown drains an already-issued settings write and rejects later writes", async () => {
+  const { device, account } = await fixture();
+  const blocked = deferred();
+  let writes = 0;
+  account.cloud.setTonieboxSettings = async () => { writes++; await blocked.promise; return box; };
+  const writing = device.setRingBrightness({ brightness: 30 });
+  let stopped = false;
+  const stopping = device.onUninit().then(() => { stopped = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(stopped, false);
+  assert.equal(account.devices.size, 1);
+  assert.throws(() => device.setRingBrightness({ brightness: 40 }), /not ready/);
+  blocked.resolve();
+  await Promise.all([writing, stopping]);
+  assert.equal(writes, 1);
+  assert.equal(device.controls.size, 0);
+  assert.equal(account.devices.size, 0);
+});
+
 test("bundled SDK confirms Homey night duration and cancels interrupted or timed-out controls", async context => {
   const { device, account, values, errors } = await fixture({ initialize: false });
   const { TonieCloudClient, ToniesRealtime } = require("../lib/tonies-sdk");
@@ -499,6 +544,17 @@ test("bundled SDK confirms Homey night duration and cancels interrupted or timed
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(socket.published.length, publishedBeforeTimeout);
   assert.equal(values.get("night_mode"), null);
+  realtime.withConfirmation = (...args) => withConfirmation(...args, 1000);
+  realtime.states.delete(box.id);
+  const abandoned = device.nightModeOn({ minutes: 30 });
+  const rejected = assert.rejects(abandoned, { name: "AbortError" });
+  await new Promise(resolve => setImmediate(resolve));
+  await device.onUninit();
+  send("online-state", { onlineState: "connected" }, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(socket.published.length, publishedBeforeTimeout);
+  await rejected;
+  assert((await realtime.pause(box.id)).acknowledged);
   assert.deepEqual(errors, []);
 });
 
@@ -767,7 +823,12 @@ test("50 initialize/uninitialize cycles release every listener and timer", async
   for (let index = 0; index < 50; index++) {
     await device.onInit();
     assert.equal(account.realtime.listenerCount("state"), 2);
+    await device.pause();
+    assert.equal(device.controls.size, 0);
+    const controlSignal = device.controlController.signal;
     await device.onUninit();
+    assert.equal(controlSignal.aborted, true);
+    assert.equal(device.controls.size, 0);
     assert.equal(account.realtime.listenerCount("state"), 0);
     assert.equal(timers.size, 0);
     assert.equal(account.devices.size, 0);

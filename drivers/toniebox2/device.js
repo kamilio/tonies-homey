@@ -22,6 +22,8 @@ class TonieboxDevice extends Homey.Device {
 
   async initialize() {
     this.lifecycle = {};
+    this.controlController = new AbortController();
+    this.controls = new Set();
     this.online = undefined;
     this.metadataCache = new Map();
     this.metadataTarget = undefined;
@@ -246,13 +248,22 @@ class TonieboxDevice extends Homey.Device {
   }
 
   trigger(id, tokens = {}) { return this.homey.flow.getDeviceTriggerCard(id).trigger(this, tokens, {}); }
-  play() { return this.account.realtime.play(this.box.id); }
-  pause() { return this.account.realtime.pause(this.box.id); }
-  next() { return this.account.realtime.skip(this.box.id, 1); }
-  previous() { return this.account.realtime.skip(this.box.id, -1); }
-  volumeUp() { return this.account.realtime.changeVolume(this.box.id, 1); }
-  volumeDown() { return this.account.realtime.changeVolume(this.box.id, -1); }
-  sleepNow() { return this.account.realtime.sleep(this.box.id); }
+  control(operation) {
+    assert(this.closed === false && !this.initializing, "Toniebox is not ready for controls");
+    const controls = this.controls;
+    assert(controls.size < 32, "At most 32 Homey controls may be pending for this Toniebox");
+    const pending = this.account.realtime.withCancellation(this.controlController.signal, operation).finally(() => controls.delete(pending));
+    controls.add(pending);
+    return pending;
+  }
+
+  play() { return this.control(() => this.account.realtime.play(this.box.id)); }
+  pause() { return this.control(() => this.account.realtime.pause(this.box.id)); }
+  next() { return this.control(() => this.account.realtime.skip(this.box.id, 1)); }
+  previous() { return this.control(() => this.account.realtime.skip(this.box.id, -1)); }
+  volumeUp() { return this.control(() => this.account.realtime.changeVolume(this.box.id, 1)); }
+  volumeDown() { return this.control(() => this.account.realtime.changeVolume(this.box.id, -1)); }
+  sleepNow() { return this.control(() => this.account.realtime.sleep(this.box.id)); }
   nightModeOff() { return this.nightMode(0); }
 
   nightModeOn({ minutes }) {
@@ -262,18 +273,18 @@ class TonieboxDevice extends Homey.Device {
 
   nightMode(seconds) {
     const state = seconds > 0 ? "on" : "off";
-    return this.account.realtime.withConfirmation(this.box.id, "app-reply/bedtime-state", reply => reply.bedtime?.stl?.state === state && (!seconds || reply.bedtime.stl.duration === seconds),
-      () => this.account.realtime.sleepTimer(this.box.id, seconds));
+    return this.control(() => this.account.realtime.withConfirmation(this.box.id, "app-reply/bedtime-state", reply => reply.bedtime?.stl?.state === state && (!seconds || reply.bedtime.stl.duration === seconds),
+      () => this.account.realtime.sleepTimer(this.box.id, seconds)));
   }
 
   setVolume({ percent }) {
     assert(Number.isFinite(percent) && percent >= 0 && percent <= 100, "Volume must be 0–100%");
-    return this.account.realtime.setVolume(this.box.id, Math.round(percent / 100 * 13));
+    return this.control(() => this.account.realtime.setVolume(this.box.id, Math.round(percent / 100 * 13)));
   }
 
   seek({ chapter, seconds = 0 }) {
     assert(Number.isInteger(chapter) && chapter >= 1 && Number.isFinite(seconds) && seconds >= 0, "Use chapter 1 or higher and nonnegative seconds");
-    return this.account.realtime.seek(this.box.id, chapter - 1, Math.round(seconds * 1000));
+    return this.control(() => this.account.realtime.seek(this.box.id, chapter - 1, Math.round(seconds * 1000)));
   }
 
   setNightLight({ color, brightness }) {
@@ -298,11 +309,12 @@ class TonieboxDevice extends Homey.Device {
     return this.settings({ lightringBrightness: brightness });
   }
 
-  settings(settings) { return this.account.cloud.setTonieboxSettings(this.box.householdId, this.box.id, settings); }
+  settings(settings) { return this.control(() => this.account.cloud.setTonieboxSettings(this.box.householdId, this.box.id, settings)); }
 
   onUninit() {
     if (this.stopping) return this.stopping;
     this.closed = true;
+    this.controlController?.abort();
     this.stopping = this.uninitialize().finally(() => { this.stopping = undefined; });
     return this.stopping;
   }
@@ -315,7 +327,7 @@ class TonieboxDevice extends Homey.Device {
     this.tasks?.removeAllListeners("countdown");
     if (this.stateListener) this.account?.realtime.off("state", this.stateListener);
     if (this.metadataListener) this.account?.realtime.off("state", this.metadataListener);
-    const pending = [this.initializing, this.pending, this.metadataPending, this.refreshing, this.countdownPending];
+    const pending = [this.initializing, this.pending, this.metadataPending, this.refreshing, this.countdownPending, Promise.allSettled(this.controls ?? [])];
     const drained = Promise.allSettled(pending);
     try {
       await Promise.all(pending);
