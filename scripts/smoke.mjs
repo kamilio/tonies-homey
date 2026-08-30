@@ -24,9 +24,10 @@ async function smokeRuntime(built) {
   assert(manifest.flow.actions.some(action => action.id === "night_mode_on"));
   assert(manifest.flow.triggers.some(trigger => trigger.id === "playback_started"));
   const require = createRequire(join(built, "app.js"));
-  const { TonieCloudClient, ToniesRealtime, isPlaying, isToniebox2 } = require("./lib/tonies-sdk");
+  const { TonieCloudClient, ToniesRealtime, isPlaying, isToniebox2, playbackPosition } = require("./lib/tonies-sdk");
   assert.equal(typeof isPlaying, "function");
   assert.equal(typeof isToniebox2, "function");
+  assert.equal(typeof playbackPosition, "function");
   const cloud = new TonieCloudClient();
   const realtime = new ToniesRealtime(cloud);
   for (const method of ["connect", "disconnect", "play", "pause", "seek", "skip", "setVolume", "changeVolume", "sleep", "sleepTimer", "withConfirmation", "withCancellation", "withConnection", "waitForState"]) assert.equal(typeof realtime[method], "function", `Missing realtime SDK method: ${method}`);

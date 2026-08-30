@@ -279,10 +279,25 @@ class TonieboxDevice extends Homey.Device {
     return pending;
   }
 
-  play() { return this.control(() => this.account.realtime.play(this.box.id)); }
-  pause() { return this.control(() => this.account.realtime.pause(this.box.id)); }
-  next() { return this.control(() => this.account.realtime.skip(this.box.id, 1)); }
-  previous() { return this.control(() => this.account.realtime.skip(this.box.id, -1)); }
+  stateControl(channel, predicate, operation) {
+    assert((this.controls?.size ?? 0) < 16, "Control queue is full (16 pending controls)");
+    const tonie = channel === "playback" ? this.account?.realtime.states.get(this.box?.id)?.playback?.tonie : undefined;
+    return this.queueControl(channel, async signal => {
+      const realtime = this.account.realtime;
+      const state = await realtime.waitForState(this.box.id, state => state.onlineState !== undefined && (state.onlineState !== "connected" || predicate(state)), 10000, { signal });
+      signal.throwIfAborted();
+      const current = realtime.states.get(this.box.id) ?? state;
+      assert.equal(current.onlineState, "connected", "Toniebox is offline; cloud wake is not supported");
+      assert(predicate(current), `Toniebox has no valid ${channel} telemetry`);
+      if (tonie) assert.equal(current.playback?.tonie, tonie, "Tonie changed before queued playback control");
+      return operation(current);
+    });
+  }
+
+  play() { return this.playbackControl("play"); }
+  pause() { return this.playbackControl("pause"); }
+  next() { return this.changeChapter(1); }
+  previous() { return this.changeChapter(-1); }
   volumeUp() { return this.volumeControl(1, true); }
   volumeDown() { return this.volumeControl(-1, true); }
   sleepNow() { return this.control(() => this.account.realtime.sleep(this.box.id)); }
@@ -305,13 +320,8 @@ class TonieboxDevice extends Homey.Device {
   }
 
   volumeControl(value, relative = false) {
-    assert((this.controls?.size ?? 0) < 16, "Volume control queue is full (16 pending controls)");
-    return this.queueControl("volume", async signal => {
+    return this.stateControl("volume", state => !relative || Number.isInteger(state.volume?.level), current => {
       const realtime = this.account.realtime;
-      const state = await realtime.waitForState(this.box.id, state => state.onlineState !== undefined && (state.onlineState !== "connected" || !relative || Number.isInteger(state.volume?.level)), 10000, { signal });
-      signal.throwIfAborted();
-      const current = realtime.states.get(this.box.id) ?? state;
-      assert.equal(current.onlineState, "connected", "Toniebox is offline; cloud wake is not supported");
       if (relative) assert(Number.isInteger(current.volume?.level) && current.volume.level >= 0 && current.volume.level <= 13, "Toniebox has no valid volume telemetry");
       const level = relative ? Math.max(0, Math.min(13, current.volume.level + value)) : value;
       if (current.volume?.level === level) return { unchanged: true, deviceConfirmed: false };
@@ -319,9 +329,48 @@ class TonieboxDevice extends Homey.Device {
     });
   }
 
+  confirmPlayback(state, predicate, operation) {
+    const realtime = this.account.realtime;
+    const tonie = state.playback?.tonie;
+    return realtime.withConfirmation(this.box.id, "playback/state", reply => reply.onlineState === "connected" && (!tonie || reply.playback?.tonie === tonie) && predicate(reply.playback), () => {
+      if (tonie) assert.equal(realtime.states.get(this.box.id)?.playback?.tonie, tonie, "Tonie changed before playback publication");
+      return operation();
+    });
+  }
+
+  playbackControl(action) {
+    const matches = playback => action === "play" ? this.sdk.isPlaying(playback) : playback?.paused === true;
+    return this.stateControl("playback", () => true, state => {
+      if (matches(state.playback)) return { unchanged: true, deviceConfirmed: false };
+      return this.confirmPlayback(state, matches, () => this.account.realtime[action](this.box.id));
+    });
+  }
+
+  changeChapter(offset) {
+    return this.stateControl("playback", state => Number.isSafeInteger(state.playback?.chapter), state => {
+      assert(state.playback.chapter >= 0, "Toniebox has no valid chapter telemetry");
+      const chapter = Math.max(0, state.playback.chapter + offset);
+      return this.confirmSeek(state, chapter, 0, chapter === state.playback.chapter);
+    });
+  }
+
+  confirmSeek(state, chapter, milliseconds, confirmPosition = false) {
+    const position = milliseconds / 1000;
+    if (state.playback?.paused === true && state.playback.chapter === chapter && this.sdk.playbackPosition(state.playback) === position) return { unchanged: true, deviceConfirmed: false };
+    const started = Date.now();
+    return this.confirmPlayback(state, playback => {
+      if (playback?.chapter !== chapter) return false;
+      if (!confirmPosition) return true;
+      const actual = this.sdk.playbackPosition(playback);
+      const elapsed = playback.paused ? 0 : Math.max(0, Date.now() - started) / 1000;
+      return Number.isFinite(actual) && actual >= position - 1 && actual <= position + elapsed + 1;
+    }, () => this.account.realtime.seek(this.box.id, chapter, milliseconds));
+  }
+
   seek({ chapter, seconds = 0 }) {
-    assert(Number.isInteger(chapter) && chapter >= 1 && Number.isFinite(seconds) && seconds >= 0, "Use chapter 1 or higher and nonnegative seconds");
-    return this.control(() => this.account.realtime.seek(this.box.id, chapter - 1, Math.round(seconds * 1000)));
+    const milliseconds = Math.round(seconds * 1000);
+    assert(Number.isSafeInteger(chapter) && chapter >= 1 && Number.isFinite(seconds) && seconds >= 0 && Number.isSafeInteger(milliseconds), "Use chapter 1 or higher and nonnegative seconds within safe integer precision");
+    return this.stateControl("playback", () => true, state => this.confirmSeek(state, chapter - 1, milliseconds, true));
   }
 
   setNightLight({ color, brightness }) {
