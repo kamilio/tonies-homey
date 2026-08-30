@@ -21,6 +21,14 @@ async function smokeRuntime(built) {
   const manifest = JSON.parse(await readFile(join(built, "app.json"), "utf8"));
   assert.equal(manifest.drivers.length, 1);
   assert.equal(manifest.drivers[0].id, "toniebox2");
+  assert.equal(manifest.version, JSON.parse(await readFile(join(built, "package.json"), "utf8")).version);
+  assert.equal(manifest.drivers[0].icon, "/drivers/toniebox2/assets/icon.svg");
+  for (const iconPath of ["/assets/icon.svg", manifest.drivers[0].icon, ...Object.values(manifest.capabilities).map(capability => capability.icon).filter(Boolean)]) {
+    const icon = await readFile(join(built, iconPath), "utf8");
+    assert.match(icon, /<svg\b[^>]*viewBox="[^"]+"/);
+    assert.match(icon, /<(?:path|circle|rect)\b/);
+    assert.doesNotMatch(icon, /<(?:image|script|foreignObject)\b/);
+  }
   assert(manifest.flow.actions.some(action => action.id === "night_mode_on"));
   assert(manifest.flow.triggers.some(trigger => trigger.id === "playback_started"));
   const require = createRequire(join(built, "app.js"));

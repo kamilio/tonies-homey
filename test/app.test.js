@@ -12,7 +12,10 @@ const definitions = require("../lib/definitions");
 function load(file) {
   const path = join(__dirname, "..", file);
   const module = { exports: {} };
-  const homey = { App: class {}, Driver: class {}, Device: class {} };
+  class HomeyBase {
+    constructor() { Object.defineProperty(this, "sdk", { value: 3, enumerable: true }); }
+  }
+  const homey = { App: HomeyBase, Driver: HomeyBase, Device: HomeyBase };
   vm.runInNewContext(readFileSync(path, "utf8"), { module, require: name => name === "homey" ? homey : createRequire(path)(name), console, setTimeout, clearTimeout, AbortController }, { filename: path });
   return module.exports;
 }
@@ -58,7 +61,7 @@ async function fixture(options = {}) {
   const device = new Device();
   const sdk = require("../lib/tonies-sdk");
   device.homey = {
-    app: { getAccount: async () => account, sdk: async () => sdk, releaseAccount: async () => { account.devices.delete(device); } },
+    app: { getAccount: async () => account, getToniesSdk: async () => sdk, releaseAccount: async () => { account.devices.delete(device); } },
     setInterval: callback => { timers.add(callback); return callback; },
     clearInterval: callback => timers.delete(callback),
     settings: { unset: () => {} },
@@ -132,7 +135,7 @@ async function managedFixture() {
   device.homey.settings = { get: key => stored.get(key), set: (key, value) => stored.set(key, value), unset: key => stored.delete(key) };
   device.driver = { getDevices: () => [device] };
   app.homey = device.homey;
-  app.sdk = async () => ({ isToniebox2: value => value.product === "tb2", TonieCloudClient: class {
+  app.getToniesSdk = async () => ({ isToniebox2: value => value.product === "tb2", TonieCloudClient: class {
     async login() { this.auth = { refreshToken: "repaired" }; }
     async request() { return { uuid: "account" }; }
     async listTonieboxes() { return [box]; }
@@ -158,12 +161,20 @@ test("SDK installs from public HTTPS at the same pinned commit in both manifests
 
 test("app reuses its bundled cloud-only SDK without loading desktop modules", async () => {
   const app = new App();
-  const sdk = await app.sdk();
-  assert.equal(await app.sdk(), sdk);
+  const sdk = await app.getToniesSdk();
+  assert.equal(app.sdk, 3);
+  assert.equal(await app.getToniesSdk(), sdk);
   assert.deepEqual(Object.keys(sdk).sort(), ["TonieCloudClient", "ToniesRealtime", "isPlaying", "isToniebox2"]);
   assert.equal(typeof sdk.TonieCloudClient.prototype.login, "function");
   assert.equal(typeof sdk.ToniesRealtime.prototype.withConfirmation, "function");
   assert(!Object.keys(require.cache).some(path => path.includes("classic-level")));
+});
+
+test("device initialization preserves Homey's reserved SDK property", async () => {
+  const { device } = await fixture();
+  assert.equal(device.sdk, 3);
+  assert.equal(typeof device.toniesSdk.isPlaying, "function");
+  await device.onUninit();
 });
 
 test("app registers every action and condition and dispatches to the selected device", async () => {
@@ -222,7 +233,7 @@ test("an SDK error is logged without changing every device's availability", asyn
   app.accounts = new Map();
   app.connecting = new Map();
   app.homey = { settings: { get: () => ({ refreshToken: "refresh" }) } };
-  app.sdk = async () => ({
+  app.getToniesSdk = async () => ({
     isToniebox2: value => value.product === "tb2",
     TonieCloudClient: class { async listTonieboxes() { return [box]; } async flushAuth() {} },
     ToniesRealtime: class extends EventEmitter { async connect() {} async disconnect() {} }
@@ -338,7 +349,7 @@ test("sign-in filters original boxes and other TNG products before pairing", asy
   app.accounts = new Map();
   app.homey = { settings: { set: (key, value) => stored.set(key, value) } };
   const { isToniebox2 } = require("../lib/tonies-sdk");
-  app.sdk = async () => ({ isToniebox2, TonieCloudClient: class {
+  app.getToniesSdk = async () => ({ isToniebox2, TonieCloudClient: class {
     auth = { accessToken: "access", refreshToken: "refresh" };
     async login() {}
     async request() { return { uuid: "account" }; }
@@ -361,7 +372,7 @@ test("repair adopts credentials into an account still connecting", async () => {
   app.accounts = new Map();
   app.connecting = new Map();
   app.homey = { settings: { get: key => stored.get(key), set: (key, value) => stored.set(key, value) } };
-  app.sdk = async () => ({
+  app.getToniesSdk = async () => ({
     isToniebox2: value => value.product === "tb2",
     TonieCloudClient: class {
       constructor(options = {}) { this.options = options; this.auth = options.auth; if (options.auth) existing = this; }
@@ -398,7 +409,7 @@ test("account teardown preserves an in-flight refresh before opening its replace
   app.accounts = new Map();
   app.connecting = new Map();
   app.homey = { settings: { get: key => stored.get(key), set: (key, value) => stored.set(key, value) } };
-  app.sdk = async () => ({
+  app.getToniesSdk = async () => ({
     isToniebox2: value => value.product === "tb2",
     TonieCloudClient: class extends TonieCloudClient {
       constructor(options) { super({ ...options, fetch: () => response.promise }); cloudInstances++; }
@@ -473,7 +484,7 @@ test("a repair during teardown cannot be overwritten by the closing client's tok
   app.clients.set("account", cloud);
   app.accounts = new Map([["account", { cloud, devices: new Set([device]), realtime: { disconnect: async () => {} } }]]);
   app.homey = { settings: { set: (key, value) => stored.set(key, value) } };
-  app.sdk = async () => ({ isToniebox2: value => value.product === "tb2", TonieCloudClient: class {
+  app.getToniesSdk = async () => ({ isToniebox2: value => value.product === "tb2", TonieCloudClient: class {
     async login() { this.auth = { refreshToken: "repaired" }; }
     async request() { return { uuid: "account" }; }
     async listTonieboxes() { listing.resolve(); return [box]; }

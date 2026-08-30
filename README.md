@@ -207,6 +207,8 @@ Your Homey communicates with Tonies' cloud using your account tokens. The app do
 
 MIT. This is an independent project, not an official Tonies or Athom app; their names and trademarks belong to their respective owners.
 
+The Toniebox icon is a monochrome vector adaptation of [HA-Toniebox's artwork](https://github.com/git4sim/HA-Toniebox/blob/main/custom_components/toniebox/brand/icon%402x.png), copyright 2025 HA-Toniebox Contributors, used under the MIT license; the SVG retains its license notice.
+
 <details>
 <summary>MIT license text</summary>
 

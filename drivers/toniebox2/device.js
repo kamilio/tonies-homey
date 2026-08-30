@@ -37,7 +37,7 @@ class TonieboxDevice extends Homey.Device {
     this.box = this.account.boxes.find(box => box.id === this.getData().id);
     assert(this.box?.product === "tb2" && this.box.generation === "tng", "This is not a Toniebox 2");
     this.account.devices.add(this);
-    this.sdk = await this.homey.app.sdk();
+    this.toniesSdk = await this.homey.app.getToniesSdk();
     if (this.closed) return;
     const lifecycle = this.lifecycle;
     this.tasks = new EventEmitter({ captureRejections: true });
@@ -195,7 +195,7 @@ class TonieboxDevice extends Homey.Device {
     if (state.headphones && state.onlineState === "connected") await this.setValue("headphones_connected", this.headphonesConnected(state));
     if (state.playback && state.onlineState === "connected") {
       const playback = state.playback;
-      await this.setValue("speaker_playing", state.onlineState === "connected" && this.sdk.isPlaying(playback));
+      await this.setValue("speaker_playing", state.onlineState === "connected" && this.toniesSdk.isPlaying(playback));
       await this.setValue("tonie_id", playback.tonie ?? "");
       await this.setValue("chapter_number", Number.isInteger(playback.chapter) ? playback.chapter + 1 : 0);
       await this.setValue("speaker_track", this.trackTitle(state));
@@ -214,7 +214,7 @@ class TonieboxDevice extends Homey.Device {
     const add = (id, tokens = {}) => events.push([id, tokens]);
     const tokens = { tonie_id: state.playback?.tonie ?? "", chapter: (state.playback?.chapter ?? -1) + 1, title: this.trackTitle(state) };
     if (topic === "playback/state") {
-      if (this.sdk.isPlaying(state.playback) && !this.sdk.isPlaying(previous.playback)) add("playback_started", tokens);
+      if (this.toniesSdk.isPlaying(state.playback) && !this.toniesSdk.isPlaying(previous.playback)) add("playback_started", tokens);
       if (state.playback?.paused === true && previous.playback?.paused === false) add("playback_paused", tokens);
       if (state.playback?.ended === true && previous.playback?.ended === false) add("playback_ended", tokens);
       if (previous.playback && state.playback?.tonie !== previous.playback.tonie) add("tonie_changed", tokens);
@@ -360,7 +360,7 @@ class TonieboxDevice extends Homey.Device {
   }
 
   playbackControl(action) {
-    const matches = playback => action === "play" ? this.sdk.isPlaying(playback) : playback?.paused === true;
+    const matches = playback => action === "play" ? this.toniesSdk.isPlaying(playback) : playback?.paused === true;
     return this.stateControl("playback", () => true, state => {
       if (matches(state.playback)) return { unchanged: true, deviceConfirmed: false };
       return this.confirmPlayback(state, matches, () => this.account.realtime[action](this.box.id));

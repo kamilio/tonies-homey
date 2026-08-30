@@ -22,12 +22,12 @@ class ToniesApp extends Homey.App {
     });
   }
 
-  async sdk() {
+  async getToniesSdk() {
     return require("./lib/tonies-sdk");
   }
 
   async signIn(email, password) {
-    const { TonieCloudClient, isToniebox2 } = await this.sdk();
+    const { TonieCloudClient, isToniebox2 } = await this.getToniesSdk();
     const cloud = new TonieCloudClient();
     await cloud.login(email, password);
     const me = await cloud.request("GET", "/me");
@@ -65,7 +65,7 @@ class ToniesApp extends Homey.App {
   }
 
   async createAccount(accountId) {
-    const { TonieCloudClient, ToniesRealtime, isToniebox2 } = await this.sdk();
+    const { TonieCloudClient, ToniesRealtime, isToniebox2 } = await this.getToniesSdk();
     const auth = this.homey.settings.get(`tonies.auth.${accountId}`);
     assert(auth?.refreshToken, "Repair this device to sign in to Tonies again");
     const cloud = new TonieCloudClient({ auth, onAuth: next => {

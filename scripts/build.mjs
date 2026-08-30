@@ -40,7 +40,7 @@ export async function build() {
   const login = { id: "login_credentials", template: "login_credentials" };
   const images = { small: "/assets/images/small.png", large: "/assets/images/large.png", xlarge: "/assets/images/xlarge.png" };
   const manifest = {
-    id: "com.kjopek.tonies", version: "0.1.0", compatibility: ">=12.9.0", sdk: 3,
+    id: "com.kjopek.tonies", version: manifestSource.version, compatibility: ">=12.9.0", sdk: 3,
     runtime: "nodejs", platforms: ["local"], brandColor: "#6049AD",
     name: { en: "Toniebox 2" }, description: { en: "Night mode, playback controls, and listening automations for Toniebox 2." },
     author: { name: "Kamil Jopek", email: "kjopek@users.noreply.github.com" },
@@ -49,7 +49,7 @@ export async function build() {
     flow: { actions: actions.map(flowCard), triggers: triggers.map(flowCard), conditions: conditions.map(flowCard) },
     drivers: [{
       id: "toniebox2", name: { en: "Toniebox 2" }, class: "speaker", platforms: ["local"], connectivity: ["cloud"],
-      capabilities: deviceCapabilities, images, icon: "/assets/icon.svg",
+      capabilities: deviceCapabilities, images, icon: "/drivers/toniebox2/assets/icon.svg",
       pair: [login, { id: "list_devices", template: "list_devices", navigation: { prev: "login_credentials", next: "add_devices" } }, { id: "add_devices", template: "add_devices" }],
       repair: [login],
       settings: [
@@ -62,6 +62,8 @@ export async function build() {
   await writeFile(join(root, "app.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   await mkdir(join(root, "assets/images"), { recursive: true });
   const icon = await readFile(join(root, "assets/icon.svg"), "utf8");
+  await mkdir(join(root, "drivers/toniebox2/assets"), { recursive: true });
+  await writeFile(join(root, "drivers/toniebox2/assets/icon.svg"), icon);
   const paths = icon.replace(/^.*?<svg[^>]*>/, "").replace(/<\/svg>\s*$/, "");
   for (const [size, width, height] of [["small", 250, 175], ["large", 500, 350], ["xlarge", 1000, 700]]) {
     const image = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 1000 700"><rect width="1000" height="700" fill="#17142c"/><circle cx="780" cy="90" r="210" fill="#302350"/><circle cx="90" cy="650" r="300" fill="#262246"/><g transform="translate(325 125) scale(3.5)" fill="#bcaaff">${paths}</g><text x="500" y="565" text-anchor="middle" font-family="sans-serif" font-size="54" font-weight="700" fill="#ffffff">Toniebox 2</text><text x="500" y="620" text-anchor="middle" font-family="sans-serif" font-size="26" fill="#cdc5e9">Listening. Night lights. Homey.</text></svg>`;
