@@ -14,7 +14,7 @@ An unofficial, cloud-connected Homey app built around **Toniebox 2 only**—not 
 
 **[Start here](#start-here) · [Flow recipes](#flow-recipes) · [Action cards](#then--action-cards) · [Trigger cards](#when--trigger-cards) · [Conditions](#and--condition-cards) · [Limits](#what-to-expect)**
 
-> **Early-access source install.** Not published in the Homey App Store. Core controls have been tested against a real Toniebox 2; the Homey event bridge has been exercised with real telemetry and a simulated Homey host, not yet verified inside a physical Homey hub.
+> **Early-access source install.** Not published in the Homey App Store. Installation and startup are verified on a physical Homey Pro. Core controls have been tested against a real Toniebox 2; the event bridge has been exercised with real telemetry and a simulated Homey host, while end-to-end paired-device Flows on the hub still need verification.
 
 ## Start here
 
@@ -175,7 +175,8 @@ Device settings also show the box ID and firmware, and let you change the defaul
 | Night mode on/off, pause/resume, live volume, next chapter | Verified against a real Toniebox 2 on **August 30, 2026**. |
 | Playback-started/paused and night-mode-started/stopped handling | Verified with real device telemetry through the app's event bridge and a simulated Homey host. |
 | Other cards | Implemented and covered by offline app tests; not all physical effects have been live-tested. |
-| Installation and Flows on a physical Homey hub | Not yet end-to-end verified. |
+| Installation and startup on a physical Homey Pro | Verified running on Homey 13.4.1 on **August 30, 2026**. |
+| Paired-device controls and Flows on the physical Homey hub | Not yet end-to-end verified. |
 | Precise time seeking | **Unavailable.** Tested firmware restarted the chapter instead; only chapter selection is exposed. |
 | Remote wake | **Unavailable.** Squeeze an ear to wake the box. |
 | Original Toniebox / Toniebox Lite | **Not paired** by this app. |
