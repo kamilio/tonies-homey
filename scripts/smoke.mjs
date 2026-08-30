@@ -23,6 +23,7 @@ async function smokeRuntime(built) {
   assert.equal(manifest.drivers[0].id, "toniebox2");
   assert.equal(manifest.version, JSON.parse(await readFile(join(built, "package.json"), "utf8")).version);
   assert.equal(manifest.drivers[0].icon, "/drivers/toniebox2/assets/icon.svg");
+  assert.notEqual(await readFile(join(built, "assets/icon.svg"), "utf8"), await readFile(join(built, manifest.drivers[0].icon), "utf8"), "Brand and device icons must be distinct");
   assert.deepEqual(manifest.drivers[0].energy.batteries, ["INTERNAL"]);
   for (const flow of ["pair", "repair"]) {
     const login = manifest.drivers[0][flow].find(view => view.template === "login_credentials");
@@ -46,7 +47,12 @@ async function smokeRuntime(built) {
   const realtime = new ToniesRealtime(cloud);
   for (const method of ["connect", "disconnect", "command", "play", "pause", "seek", "skip", "setVolume", "changeVolume", "sleep", "sleepTimer", "withConfirmation", "withCancellation", "withConnection", "waitForState"]) assert.equal(typeof realtime[method], "function", `Missing realtime SDK method: ${method}`);
   for (const method of ["login", "setAuth", "flushAuth", "listTonieboxes", "getToniebox", "setTonieboxSettings", "playbackInfo"]) assert.equal(typeof cloud[method], "function", `Missing cloud SDK method: ${method}`);
-  for (const image of Object.values(manifest.images)) await access(join(built, image));
+  for (const images of [manifest.images, manifest.drivers[0].images]) for (const image of Object.values(images)) await access(join(built, image));
+  assert.notDeepEqual(manifest.images, manifest.drivers[0].images, "App and driver images must be distinct");
+  const listing = await readFile(join(built, "README.txt"), "utf8");
+  assert.match(listing, /Toniebox 2 only/);
+  assert.doesNotMatch(listing, /https?:\/\/|^#/m);
+  await assert.rejects(access(join(built, "assets/source")), { code: "ENOENT" });
   for (const dependency of ["@kamils-jamco/tonies-sdk/cloud", "classic-level", "toolcraft", "music-metadata", "esbuild", "yaml"]) {
     assert.throws(() => require.resolve(dependency), { code: "MODULE_NOT_FOUND" }, `Desktop dependency must not be deployed: ${dependency}`);
   }

@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/images/large.png" alt="Toniebox 2 — Listening. Night lights. Homey." width="500">
+  <img src="assets/images/large.jpg" alt="Story time with a Toniebox 2" width="500">
 </p>
 
-# Toniebox 2 for Homey
+# Tonies for Homey
 
 **Start night mode from a Flow. Pause a story from your phone. Let your home react when listening begins.**
 
@@ -12,7 +12,7 @@
 
 An unofficial, cloud-connected Homey app built around **Toniebox 2 only**—not original Tonieboxes, Toniebox Lite, or individual figurines as devices.
 
-**[Start here](#start-here) · [Flow recipes](#flow-recipes) · [Action cards](#then--action-cards) · [Trigger cards](#when--trigger-cards) · [Conditions](#and--condition-cards) · [Limits](#what-to-expect)**
+**[Changelog](CHANGELOG.md) · [Start here](#start-here) · [Flow recipes](#flow-recipes) · [Action cards](#then--action-cards) · [Trigger cards](#when--trigger-cards) · [Conditions](#and--condition-cards) · [Limits](#what-to-expect)**
 
 > **Early-access source install.** Not published in the Homey App Store. Installation and startup are verified on a physical Homey Pro. Core controls have been tested against a real Toniebox 2; the event bridge has been exercised with real telemetry and a simulated Homey host, while end-to-end paired-device Flows on the hub still need verification.
 
@@ -43,7 +43,7 @@ Homey's CLI prompts you to sign in and select your hub. The app's SDK dependency
 
 ### Pair your box
 
-1. In Homey, choose **Devices → Add device → Toniebox 2**.
+1. In Homey, choose **Devices → Add device → Tonies → Toniebox 2**.
 2. Sign in with your **Tonies** account—not your Homey account.
 3. Select the Toniebox 2 devices you want to add.
 4. Wake a box by squeezing an ear, then try its **Night mode** toggle.
@@ -83,7 +83,7 @@ Find the Tonie ID in the device's **Tonie ID** value, or use the trigger's `toni
 
 | When | And | Then, in order |
 | --- | --- | --- |
-| Your bedtime button is pressed | **The Toniebox is online** | **Set night light to `#ff8800` at `15%`** → **Set night volume limits to `25%` / `25%`** → **Start night mode for 30 minutes** |
+| Your bedtime button is pressed | **Is online** | **Set night light to `#ff8800` at `15%`** → **Set night volume limits to `25%` / `25%`** → **Start night mode for 30 minutes** |
 
 In Advanced Flow, connect the actions sequentially so the settings finish before the timer starts. Or set light and volume once, and keep the daily Flow to a single night-mode action.
 
@@ -93,10 +93,10 @@ In Advanced Flow, connect the actions sequentially so the settings finish before
 | --- | --- | --- | --- |
 | Dim the bedroom for a story | **Playback started** | **Night mode is active** | Dim your room lights. |
 | Pause when the doorbell rings | Your doorbell rings | **Playback is active** | **Pause playback**. |
-| Resume with a bedside button | Your button is pressed | **The Toniebox is online** | **Resume playback**. |
+| Resume with a bedside button | Your button is pressed | **Is online** | **Resume playback**. |
 | Finish the bedtime scene | **The sleep timer completed** | — | Turn off the room lamp. |
 | Remind me to charge | **Battery became low** | — | Send a notification using the `percent` tag. |
-| Start a scheduled night timer | Homey's time trigger | **The Toniebox is online** | **Start night mode for 20 minutes**. |
+| Start a scheduled night timer | Homey's time trigger | **Is online** | **Start night mode for 20 minutes**. |
 
 An online condition prevents trying to control a known sleeping box; it cannot guarantee the box stays connected until the action completes. Timer-completed automations require the app to receive the box's completion event.
 
@@ -120,8 +120,8 @@ Every action targets a paired Toniebox 2. IDs are included for an unambiguous re
 | **Lower playback volume one step** | One device-volume step. | `volume_down` |
 | **Set speaker volume limit to …%** | 25%, 50%, 75%, or 100%; separate from live volume. | `volume_limit` |
 | **Set light ring brightness to …%** | Normal light ring brightness, 0–100%. | `ring_brightness` |
-| **Put the Toniebox to sleep** | Sleep now; **requires physical interaction to wake again**. | `sleep_now` |
-| **Refresh Toniebox settings** | Re-read cloud settings; not a content-download or wake action. | `refresh` |
+| **Put to sleep** | Sleep now; **requires physical interaction to wake again**. | `sleep_now` |
+| **Refresh settings** | Re-read cloud settings; not a content-download or wake action. | `refresh` |
 
 Chapter range is the card's input range, not a promise that a particular Tonie has that many chapters. The device still determines which chapters exist.
 
@@ -137,11 +137,11 @@ Chapter range is the card's input range, not a promise that a particular Tonie h
 | **Night mode started** | — | `night_mode_started` |
 | **Night mode stopped** | — | `night_mode_ended` |
 | **The sleep timer completed** | — | `sleep_timer_completed` |
-| **The Toniebox came online** | — | `box_online` |
-| **The Toniebox went offline** | — | `box_offline` |
+| **Came online** | — | `box_online` |
+| **Went offline** | — | `box_offline` |
 | **Headphone connection changed** | `connected` (boolean) | `headphones_changed` |
 | **Battery became low** | `percent` (number) | `battery_low` |
-| **The Toniebox applied its settings** | — | `settings_applied` |
+| **Settings were applied** | — | `settings_applied` |
 
 **How to use the tags:** `tonie_id` identifies the current figurine, `chapter` is 1-based (`0` when unknown), and `title` is the track title when available. A title may initially be empty while metadata loads; use Tonie ID rather than title for reliable filtering.
 
@@ -152,7 +152,7 @@ Chapter range is the card's input range, not a promise that a particular Tonie h
 | Card | Use it to check | ID |
 | --- | --- | --- |
 | **Playback is / is not active** | Whether a story is currently playing. | `is_playing` |
-| **The Toniebox is / is not online** | Whether the box reports connected. | `is_online` |
+| **Is / is not online** | Whether the box reports connected. | `is_online` |
 | **Night mode is / is not active** | Whether the native sleep-light timer is running. | `is_night_mode` |
 | **Headphones are / are not connected** | Current headphone connection state. | `has_headphones` |
 | **Tonie … is / is not on the box** | Match an exact Tonie ID. | `is_tonie` |
@@ -209,7 +209,7 @@ Your Homey communicates with Tonies' cloud using your account tokens. The app do
 
 MIT. This is an independent project, not an official Tonies or Athom app; their names and trademarks belong to their respective owners.
 
-The Toniebox icon is a monochrome vector adaptation of [HA-Toniebox's artwork](https://github.com/git4sim/HA-Toniebox/blob/main/custom_components/toniebox/brand/icon%402x.png), copyright 2025 HA-Toniebox Contributors, used under the MIT license; the SVG retains its license notice.
+The brand mark and product photographs are third-party Tonies assets, not MIT-licensed project artwork; see [artwork sources and rights](NOTICE.md). The distinct Toniebox 2 device icon is an original vector illustration.
 
 <details>
 <summary>MIT license text</summary>

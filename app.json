@@ -7,12 +7,12 @@
   "platforms": [
     "local"
   ],
-  "brandColor": "#6049AD",
+  "brandColor": "#D2000F",
   "name": {
-    "en": "Toniebox 2"
+    "en": "Tonies"
   },
   "description": {
-    "en": "Night mode, playback controls, and listening automations for Toniebox 2."
+    "en": "Little stories, gentler bedtimes"
   },
   "author": {
     "name": "Kamil Jopek",
@@ -23,10 +23,25 @@
   ],
   "permissions": [],
   "images": {
-    "small": "/assets/images/small.png",
-    "large": "/assets/images/large.png",
-    "xlarge": "/assets/images/xlarge.png"
+    "small": "/assets/images/small.jpg",
+    "large": "/assets/images/large.jpg",
+    "xlarge": "/assets/images/xlarge.jpg"
   },
+  "tags": {
+    "en": [
+      "Toniebox 2",
+      "bedtime",
+      "night light",
+      "audio",
+      "stories"
+    ]
+  },
+  "source": "https://github.com/kamilio/tonies-homey",
+  "homepage": "https://github.com/kamilio/tonies-homey#readme",
+  "bugs": {
+    "url": "https://github.com/kamilio/tonies-homey/issues"
+  },
+  "support": "https://github.com/kamilio/tonies-homey/issues",
   "capabilities": {
     "night_mode": {
       "type": "boolean",
@@ -458,10 +473,10 @@
       {
         "id": "sleep_now",
         "title": {
-          "en": "Put the Toniebox to sleep"
+          "en": "Put to sleep"
         },
         "titleFormatted": {
-          "en": "Put the Toniebox to sleep"
+          "en": "Put to sleep"
         },
         "hint": {
           "en": "The Toniebox cannot be woken remotely; squeeze an ear to wake it."
@@ -477,10 +492,10 @@
       {
         "id": "refresh",
         "title": {
-          "en": "Refresh Toniebox settings"
+          "en": "Refresh settings"
         },
         "titleFormatted": {
-          "en": "Refresh Toniebox settings"
+          "en": "Refresh settings"
         },
         "args": [
           {
@@ -738,10 +753,10 @@
       {
         "id": "box_online",
         "title": {
-          "en": "The Toniebox came online"
+          "en": "Came online"
         },
         "titleFormatted": {
-          "en": "The Toniebox came online"
+          "en": "Came online"
         },
         "args": [
           {
@@ -754,10 +769,10 @@
       {
         "id": "box_offline",
         "title": {
-          "en": "The Toniebox went offline"
+          "en": "Went offline"
         },
         "titleFormatted": {
-          "en": "The Toniebox went offline"
+          "en": "Went offline"
         },
         "args": [
           {
@@ -820,10 +835,10 @@
       {
         "id": "settings_applied",
         "title": {
-          "en": "The Toniebox applied its settings"
+          "en": "Settings were applied"
         },
         "titleFormatted": {
-          "en": "The Toniebox applied its settings"
+          "en": "Settings were applied"
         },
         "args": [
           {
@@ -854,10 +869,10 @@
       {
         "id": "is_online",
         "title": {
-          "en": "The Toniebox !{{is|is not}} online"
+          "en": "!{{Is|Is not}} online"
         },
         "titleFormatted": {
-          "en": "The Toniebox !{{is|is not}} online"
+          "en": "!{{Is|Is not}} online"
         },
         "args": [
           {
@@ -956,9 +971,9 @@
         "ring_brightness"
       ],
       "images": {
-        "small": "/assets/images/small.png",
-        "large": "/assets/images/large.png",
-        "xlarge": "/assets/images/xlarge.png"
+        "small": "/drivers/toniebox2/assets/images/small.jpg",
+        "large": "/drivers/toniebox2/assets/images/large.jpg",
+        "xlarge": "/drivers/toniebox2/assets/images/xlarge.jpg"
       },
       "icon": "/drivers/toniebox2/assets/icon.svg",
       "energy": {

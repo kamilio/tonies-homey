@@ -17,18 +17,20 @@
   "scripts": {
     "build": "node scripts/build.mjs && homey app build",
     "validate": "node scripts/build.mjs && homey app validate --level debug",
+    "validate:store": "node scripts/build.mjs && homey app validate --level publish",
+    "release": "node scripts/release.mjs",
     "test": "node --test test/*.test.js",
     "test:memory": "node --expose-gc test/app.test.js",
     "smoke:build": "node scripts/smoke.mjs",
-    "verify": "npm test && npm run validate && npm run build && npm run smoke:build"
+    "verify": "npm test && npm run validate:store && npm run build && npm run smoke:build"
   },
   "dependencies": {
     "mqtt": "^5.15.2"
   },
   "devDependencies": {
     "@kamils-jamco/tonies-sdk": "git+https://github.com/kamilio/tonies-sdk.git#b4ffb2e60e990a6d416bb5315dcbd393c44deab0",
-    "@resvg/resvg-js": "^2.6.2",
     "esbuild": "^0.28.2",
-    "homey": "4.3.1"
+    "homey": "4.3.1",
+    "sharp": "0.33.5"
   }
 }

@@ -1,0 +1,3 @@
+Make story time part of your home. Start your Toniebox 2's native sleep timer and night light from a bedtime Flow, pause or resume the current story, and let your lights react when listening starts. Set a gentle bedtime volume and keep an eye on the battery without reaching for the box.
+
+This independent community app supports Toniebox 2 only and requires a Tonies account and an internet connection. Sign in with the account used in your Tonies app; access tokens renew automatically and your password is not stored. The box must be awake and online for controls to work: remote wake and seeking to an exact time within a chapter are not supported. Not affiliated with or endorsed by Tonies or Athom.

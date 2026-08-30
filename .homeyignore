@@ -11,3 +11,5 @@ env.json
 node_modules/homey/
 node_modules/@resvg/
 USAGE.md
+assets/source/
+CHANGELOG.md
