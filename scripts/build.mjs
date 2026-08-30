@@ -15,7 +15,7 @@ export async function build() {
   const runtime = await bundle({
     absWorkingDir: root,
     stdin: {
-      contents: 'export { TonieCloudClient, isToniebox2 } from "@kamils-jamco/tonies-sdk/cloud"; export { ToniesRealtime, isPlaying, playbackPosition } from "@kamils-jamco/tonies-sdk/realtime";',
+      contents: 'export { TonieCloudClient, isToniebox2 } from "@kamils-jamco/tonies-sdk/cloud"; export { ToniesRealtime, isPlaying } from "@kamils-jamco/tonies-sdk/realtime";',
       resolveDir: root,
       sourcefile: "tonies-sdk-entry.js"
     },

@@ -371,27 +371,18 @@ class TonieboxDevice extends Homey.Device {
     return this.stateControl("playback", state => Number.isSafeInteger(state.playback?.chapter), state => {
       assert(state.playback.chapter >= 0, "Toniebox has no valid chapter telemetry");
       const chapter = Math.max(0, state.playback.chapter + offset);
-      return this.confirmSeek(state, chapter, 0, chapter === state.playback.chapter);
+      return this.confirmSeek(state, chapter);
     });
   }
 
-  confirmSeek(state, chapter, milliseconds, confirmPosition = false) {
-    const position = milliseconds / 1000;
-    if (state.playback?.paused === true && state.playback.chapter === chapter && this.sdk.playbackPosition(state.playback) === position) return { unchanged: true, deviceConfirmed: false };
-    const started = Date.now();
-    return this.confirmPlayback(state, playback => {
-      if (playback?.chapter !== chapter) return false;
-      if (!confirmPosition) return true;
-      const actual = this.sdk.playbackPosition(playback);
-      const elapsed = playback.paused ? 0 : Math.max(0, Date.now() - started) / 1000;
-      return Number.isFinite(actual) && actual >= position - 1 && actual <= position + elapsed + 1;
-    }, () => this.account.realtime.seek(this.box.id, chapter, milliseconds));
+  confirmSeek(state, chapter) {
+    return this.confirmPlayback(state, playback => playback?.chapter === chapter, () => this.account.realtime.seek(this.box.id, chapter, 0));
   }
 
   seek({ chapter, seconds = 0 }) {
-    const milliseconds = Math.round(seconds * 1000);
-    assert(Number.isSafeInteger(chapter) && chapter >= 1 && Number.isFinite(seconds) && seconds >= 0 && Number.isSafeInteger(milliseconds), "Use chapter 1 or higher and nonnegative seconds within safe integer precision");
-    return this.stateControl("playback", () => true, state => this.confirmSeek(state, chapter - 1, milliseconds, true));
+    assert(Number.isSafeInteger(chapter) && chapter >= 1, "Use chapter 1 or higher within safe integer precision");
+    assert.equal(seconds, 0, "Exact time seeking is not supported; select a chapter without a seconds offset");
+    return this.stateControl("playback", () => true, state => this.confirmSeek(state, chapter - 1));
   }
 
   setNightLight({ color, brightness }) {

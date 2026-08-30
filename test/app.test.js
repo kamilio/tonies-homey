@@ -150,7 +150,7 @@ test("app reuses its bundled cloud-only SDK without loading desktop modules", as
   const app = new App();
   const sdk = await app.sdk();
   assert.equal(await app.sdk(), sdk);
-  assert.deepEqual(Object.keys(sdk).sort(), ["TonieCloudClient", "ToniesRealtime", "isPlaying", "isToniebox2", "playbackPosition"]);
+  assert.deepEqual(Object.keys(sdk).sort(), ["TonieCloudClient", "ToniesRealtime", "isPlaying", "isToniebox2"]);
   assert.equal(typeof sdk.TonieCloudClient.prototype.login, "function");
   assert.equal(typeof sdk.ToniesRealtime.prototype.withConfirmation, "function");
   assert(!Object.keys(require.cache).some(path => path.includes("classic-level")));
@@ -803,22 +803,22 @@ test("queued chapter controls never advance a replacement Tonie", async context 
   assert((await next).deviceConfirmed);
 });
 
-test("seek confirms position before a queued next command reads the new chapter", async context => {
+test("chapter selection confirms a fresh partial reply before queued next reads the new chapter", async context => {
   const { device, socket, send } = await realtimeFixture(context);
   send("playback/state", { tonie: "TONIE", chapter: 0, paused: true, chapterPositionMs: 0 }, true);
   let sought = false;
-  const seeking = device.seek({ chapter: 3, seconds: 12 }).then(result => { sought = true; return result; });
+  const seeking = device.seek({ chapter: 3 }).then(result => { sought = true; return result; });
   const next = device.next();
   const settled = Promise.allSettled([seeking, next]);
   context.after(() => settled);
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(socket.published[0].payload, { action: "setPosition", chapter: 2, ms: 12000 });
-  send("playback/state", { tonie: "TONIE", chapter: 2, paused: true, chapterPositionMs: 3000 });
-  send("playback/state", { tonie: "TONIE", chapter: 2, paused: true, chapterPositionMs: 12000 }, true);
+  assert.deepEqual(socket.published[0].payload, { action: "setPosition", chapter: 2, ms: 0 });
+  send("playback/state", { tonie: "TONIE", chapter: 1, paused: true });
+  send("playback/state", { tonie: "TONIE", chapter: 2, paused: true }, true);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(sought, false);
   assert.equal(socket.published.length, 1);
-  send("playback/state", { tonie: "TONIE", chapter: 2, paused: true, chapterPositionMs: 12000 });
+  send("playback/state", { tonie: "TONIE", chapter: 2, paused: true });
   assert((await seeking).deviceConfirmed);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(socket.published[1].payload.chapter, 3);
@@ -826,22 +826,16 @@ test("seek confirms position before a queued next command reads the new chapter"
   assert((await next).deviceConfirmed);
 });
 
-test("playing seek accepts timestamp-derived progress but not the wrong position", async context => {
-  const { device, send } = await realtimeFixture(context);
+test("unsupported time seeking is rejected before any playback command is published", async context => {
+  const { device, socket, send } = await realtimeFixture(context);
   send("playback/state", { tonie: "TONIE", chapter: 0, paused: false }, true);
-  let confirmed = false;
-  const seeking = device.seek({ chapter: 1, seconds: 10 }).then(result => { confirmed = true; return result; });
-  const settled = Promise.allSettled([seeking]);
-  context.after(() => settled);
-  await new Promise(resolve => setImmediate(resolve));
-  send("playback/state", { tonie: "TONIE", chapter: 0, paused: false, chapterDuration: 120, chapterUntilMs: Date.now() + 100000 });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(confirmed, false);
-  send("playback/state", { tonie: "TONIE", chapter: 0, paused: false, chapterDuration: 120, chapterUntilMs: Date.now() + 110000 });
-  assert((await seeking).deviceConfirmed);
+  assert.throws(() => device.seek({ chapter: 1, seconds: 10 }), /Exact time seeking is not supported/);
+  assert.equal(socket.published.length, 0);
+  assert.equal(device.controlQueues.size, 0);
+  assert.deepEqual(definitions.actions.find(action => action.id === "seek").args.map(argument => argument.name), ["chapter"]);
 });
 
-test("previous on the first chapter confirms its rewind rather than just its chapter", async context => {
+test("previous on the first chapter accepts the device reply without position telemetry", async context => {
   const { device, socket, send } = await realtimeFixture(context);
   send("playback/state", { tonie: "TONIE", chapter: 0, paused: true, chapterPositionMs: 20000 }, true);
   let rewound = false;
@@ -850,12 +844,11 @@ test("previous on the first chapter confirms its rewind rather than just its cha
   context.after(() => settled);
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(socket.published[0].payload, { action: "setPosition", chapter: 0, ms: 0 });
-  send("playback/state", { tonie: "TONIE", chapter: 0, paused: true, chapterPositionMs: 20000 });
+  send("playback/state", { tonie: "TONIE", chapter: 0, paused: true }, true);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(rewound, false);
-  send("playback/state", { tonie: "TONIE", chapter: 0, paused: true, chapterPositionMs: 0 });
+  send("playback/state", { tonie: "TONIE", chapter: 0, paused: true });
   assert((await previous).deviceConfirmed);
-  assert((await device.previous()).unchanged);
   assert.equal(socket.published.length, 1);
 });
 
@@ -1030,7 +1023,9 @@ test("queued controls expire from enqueue time and never execute after their dea
   assert.equal(device.controlQueues.size, 0);
 });
 
-test("10000 confirmed volume, chapter, and night changes release Homey queues and retained heap", async context => {
+test("confirmed volume, chapter, and night changes release Homey queues and retained heap", async context => {
+  const iterations = Number(process.env.TONIES_CONTROL_SOAK_ITERATIONS ?? 10000);
+  assert(Number.isSafeInteger(iterations) && iterations >= 1 && iterations <= 1000000, "Control soak iterations must be an integer from 1 to 1000000");
   const { device, realtime, socket, send, errors } = await realtimeFixture(context);
   device.homey.flow.getDeviceTriggerCard = () => ({ trigger: async () => {} });
   let messageId = 0;
@@ -1051,7 +1046,7 @@ test("10000 confirmed volume, chapter, and night changes release Homey queues an
   global.gc?.();
   const baseline = process.memoryUsage().heapUsed;
   const started = performance.now();
-  for (let index = 0; index < 10000; index++) await operations[index % operations.length]();
+  for (let index = 0; index < iterations; index++) await operations[index % operations.length]();
   await device.pending;
   await device.metadataPending;
   await Promise.all(device.controlQueues.values());
@@ -1066,17 +1061,17 @@ test("10000 confirmed volume, chapter, and night changes release Homey queues an
   assert.equal(realtime.listenerCount("error"), 1);
   assert.deepEqual(errors, []);
   if (global.gc) assert(retained < 2 * 1024 * 1024, `Homey controls retained ${retained} heap bytes`);
-  context.diagnostic(`10000 confirmed mixed controls: ${(performance.now() - started).toFixed(1)} ms; retained heap delta ${retained} bytes${global.gc ? " after GC" : " (GC not forced)"}`);
+  context.diagnostic(`${iterations} confirmed mixed controls: ${(performance.now() - started).toFixed(1)} ms; retained heap delta ${retained} bytes${global.gc ? " after GC" : " (GC not forced)"}`);
 });
 
 test("volume and chapters convert Homey units without confusing limits with playback", async () => {
   const { device, controls } = await fixture();
   await device.setVolume({ percent: 50 });
-  await device.seek({ chapter: 2, seconds: 1.5 });
+  await device.seek({ chapter: 2 });
   await device.setVolumeLimit({ percent: "50" });
   await device.setNightLight({ color: "#FF8800", brightness: 0 });
   assert.deepEqual(controls[0], { method: "setVolume", args: ["TB2", 7] });
-  assert.deepEqual(controls[1], { method: "seek", args: ["TB2", 1, 1500] });
+  assert.deepEqual(controls[1], { method: "seek", args: ["TB2", 1, 0] });
   assert.equal(controls[2].args[2].maxVolume, 50);
   assert.equal(controls[3].args[2].bedtimeLightringColor, "#ff8800");
   assert.equal(controls[3].args[2].bedtimeLightringBrightness, 0);
@@ -1431,4 +1426,64 @@ test("shutdown drains other workers even when one worker fails", async () => {
   await stopping;
   assert.equal(account.devices.size, 0);
   assert.equal(account.realtime.listenerCount("state"), 0);
+});
+
+test("live Homey bridge confirms playback, night mode, volume, and Flow transitions", {
+  skip: !process.env.TONIES_LIVE_BOX,
+  timeout: 60000
+}, async context => {
+  const accessToken = process.env.TONIES_ACCESS_TOKEN;
+  assert(accessToken, "Set TONIES_ACCESS_TOKEN to an existing short-lived token; this test never refreshes credentials");
+  const expiresAt = JSON.parse(Buffer.from(accessToken.split(".")[1], "base64url").toString()).exp * 1000;
+  assert(expiresAt > Date.now() + 90000, "The test token must remain valid for at least 90 seconds");
+  const { TonieCloudClient, ToniesRealtime, isPlaying } = require("../lib/tonies-sdk");
+  const cloud = new TonieCloudClient({ auth: { accessToken, expiresAt } });
+  const selected = await cloud.findToniebox(process.env.TONIES_LIVE_BOX);
+  assert(selected.product === "tb2" && selected.generation === "tng");
+  const { device, account, values, triggers, errors } = await fixture({ initialize: false });
+  const realtime = new ToniesRealtime(cloud);
+  realtime.on("error", error => errors.push(error));
+  account.cloud = cloud;
+  account.realtime = realtime;
+  account.boxes = [selected];
+  device.getData = () => ({ id: selected.id });
+  let original;
+  context.after(async () => {
+    try {
+      if (original && realtime.states.get(selected.id)?.onlineState === "connected") {
+        if (realtime.states.get(selected.id)?.bedtime?.stl?.state !== "off") await realtime.sleepTimer(selected.id, 0);
+        if (realtime.states.get(selected.id)?.volume?.level !== original.volume.level) await realtime.setVolume(selected.id, original.volume.level);
+        const playback = realtime.states.get(selected.id)?.playback;
+        if (playback?.tonie === original.playback.tonie && !isPlaying(playback)) await realtime.play(selected.id);
+      }
+    } finally {
+      try { await device.onUninit(); }
+      finally { await realtime.disconnect(); }
+    }
+  });
+  await realtime.connect([selected]);
+  original = await realtime.waitForState(selected.id, state => state.onlineState === "connected" && isPlaying(state.playback) && state.bedtime?.stl?.state === "off" && Number.isInteger(state.volume?.level), 10000);
+  await device.onInit();
+  const sameTonie = () => assert(realtime.states.get(selected.id)?.playback?.tonie === original.playback.tonie, "The physical Tonie changed during testing");
+  sameTonie();
+  assert((await device.pause()).deviceConfirmed);
+  sameTonie();
+  assert((await device.play()).deviceConfirmed);
+  const currentLevel = realtime.states.get(selected.id).volume.level;
+  const level = [currentLevel - 1, currentLevel + 1, currentLevel - 2, currentLevel + 2].find(candidate => candidate >= 0 && candidate <= 13 && candidate !== original.volume.level);
+  assert(Number.isInteger(level));
+  assert((await device.setVolume({ percent: level / 13 * 100 })).deviceConfirmed);
+  assert((await device.nightModeOn({ minutes: 30 })).deviceConfirmed);
+  assert((await device.nightModeOff()).deviceConfirmed);
+  sameTonie();
+  const restored = await device.setVolume({ percent: original.volume.level / 13 * 100 });
+  assert(restored.deviceConfirmed || restored.unchanged);
+  await device.pending;
+  sameTonie();
+  assert.equal(values.get("speaker_playing"), true);
+  assert.equal(values.get("night_mode"), false);
+  assert.equal(realtime.states.get(selected.id).volume.level, original.volume.level);
+  for (const id of ["playback_paused", "playback_started", "night_mode_started", "night_mode_ended"]) assert(triggers.some(trigger => trigger.id === id), `Missing live ${id} transition`);
+  assert.deepEqual(errors, []);
+  context.diagnostic(JSON.stringify({ playing: true, sameTonie: true, nightMode: false, restoredVolume: original.volume.level, flows: triggers.map(trigger => trigger.id) }));
 });

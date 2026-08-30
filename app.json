@@ -299,10 +299,10 @@
       {
         "id": "seek",
         "title": {
-          "en": "Go to chapter … at … seconds"
+          "en": "Go to chapter …"
         },
         "titleFormatted": {
-          "en": "Go to chapter [[chapter]] at [[seconds]] seconds"
+          "en": "Go to chapter [[chapter]]"
         },
         "args": [
           {
@@ -318,16 +318,6 @@
             },
             "min": 1,
             "max": 999,
-            "step": 1
-          },
-          {
-            "name": "seconds",
-            "type": "number",
-            "title": {
-              "en": "Seconds into chapter"
-            },
-            "min": 0,
-            "max": 86400,
             "step": 1
           }
         ]
