@@ -193,15 +193,19 @@ test("releasing an account cannot lend or delete a closing connection", async ()
   const app = new App();
   const closing = deferred();
   const device = {};
-  const previous = { devices: new Set([device]), realtime: { disconnect: () => closing.promise } };
+  const previous = { devices: new Set([device]), cloud: { flushAuth: async () => {} }, realtime: { disconnect: () => closing.promise } };
   const replacement = { devices: new Set(), realtime: {} };
   app.accounts = new Map([["account", previous]]);
   app.connecting = new Map();
   app.createAccount = async () => replacement;
   const release = app.releaseAccount("account", device);
-  assert.equal(await app.getAccount("account"), replacement);
+  const next = app.getAccount("account");
+  assert.equal(app.accounts.size, 0);
+  assert.equal(app.closing.size, 1);
   closing.resolve();
   await release;
+  assert.equal(await next, replacement);
+  assert.equal(app.closing.size, 0);
   assert.equal(app.accounts.get("account"), replacement);
   await app.releaseAccount("account", device);
   assert.equal(app.accounts.get("account"), replacement);
@@ -260,6 +264,7 @@ test("repair adopts credentials into an account still connecting", async () => {
       async request() { return { uuid: "account" }; }
       async listTonieboxes() { if (this.options.auth) { started.resolve(); await listing.promise; } return [box]; }
       async setAuth(auth) { this.auth = auth; this.options.onAuth(auth); }
+      async flushAuth() {}
     },
     ToniesRealtime: class extends EventEmitter { async connect() {} async disconnect() {} }
   });
@@ -275,6 +280,109 @@ test("repair adopts credentials into an account still connecting", async () => {
   existing.options.onAuth({ accessToken: "late-old-token" });
   assert.equal(stored.get("tonies.auth.account").accessToken, "repaired");
   assert.equal(app.clients.size, 0);
+});
+
+test("account teardown preserves an in-flight refresh before opening its replacement", async () => {
+  const app = new App();
+  const { TonieCloudClient } = require("../lib/tonies-sdk");
+  const stored = new Map([["tonies.auth.account", { accessToken: "old", refreshToken: "old-refresh", expiresAt: Date.now() + 3600000 }]]);
+  const response = deferred();
+  const device = {};
+  const replacementDevice = {};
+  let cloudInstances = 0;
+  app.accounts = new Map();
+  app.connecting = new Map();
+  app.homey = { settings: { get: key => stored.get(key), set: (key, value) => stored.set(key, value) } };
+  app.sdk = async () => ({
+    isToniebox2: value => value.product === "tb2",
+    TonieCloudClient: class extends TonieCloudClient {
+      constructor(options) { super({ ...options, fetch: () => response.promise }); cloudInstances++; }
+      async listTonieboxes() { return [box]; }
+    },
+    ToniesRealtime: class extends EventEmitter { async connect() {} async disconnect() {} }
+  });
+  const account = await app.getAccount("account", device);
+  const refresh = account.cloud.refresh();
+  const released = app.releaseAccount("account", device);
+  const replacement = app.getAccount("account", replacementDevice);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cloudInstances, 1);
+  response.resolve(Response.json({ access_token: "rotated", refresh_token: "rotated-refresh", expires_in: 300 }));
+  await refresh;
+  await released;
+  const next = await replacement;
+  assert.equal(stored.get("tonies.auth.account").refreshToken, "rotated-refresh");
+  assert.equal(next.cloud.auth.refreshToken, "rotated-refresh");
+  assert.equal(app.clients.size, 1);
+  await app.releaseAccount("account", replacementDevice);
+  assert.equal(app.clients.size, 0);
+});
+
+test("deleting the last device removes credentials after late token persistence", async () => {
+  const app = new App();
+  const stored = new Map([["tonies.auth.account", { refreshToken: "old-refresh" }]]);
+  const pending = deferred();
+  const flushing = deferred();
+  const device = {};
+  const cloud = { flushAuth: async () => { flushing.resolve(); await pending.promise; stored.set("tonies.auth.account", { refreshToken: "rotated" }); } };
+  const account = { cloud, devices: new Set([device]), realtime: { disconnect: async () => {} } };
+  app.accounts = new Map([["account", account]]);
+  app.connecting = new Map();
+  app.clients.set("account", cloud);
+  app.homey = { settings: { get: key => stored.get(key), unset: key => stored.delete(key) } };
+  const released = app.releaseAccount("account", device, true);
+  await flushing.promise;
+  const replacement = assert.rejects(app.getAccount("account", {}), /Repair/);
+  pending.resolve();
+  await released;
+  await replacement;
+  assert.equal(stored.size, 0);
+  assert.equal(app.clients.size, 0);
+  assert.equal(app.closing.size, 0);
+  assert.equal(app.connecting.size, 0);
+});
+
+test("failed credential draining releases lifecycle maps and allows a later retry", async () => {
+  const app = new App();
+  const device = {};
+  const cloud = { flushAuth: async () => { throw new Error("credential persistence failed"); } };
+  app.clients.set("account", cloud);
+  app.accounts = new Map([["account", { cloud, devices: new Set([device]), realtime: { disconnect: async () => { throw new Error("socket close failed"); } } }]]);
+  app.connecting = new Map();
+  await assert.rejects(app.releaseAccount("account", device), /credential persistence failed/);
+  assert.equal(app.clients.size, 0);
+  assert.equal(app.accounts.size, 0);
+  assert.equal(app.closing.size, 0);
+  const replacement = { devices: new Set() };
+  app.createAccount = async () => replacement;
+  assert.equal(await app.getAccount("account", device), replacement);
+});
+
+test("a repair during teardown cannot be overwritten by the closing client's token", async () => {
+  const app = new App();
+  const stored = new Map();
+  const pending = deferred();
+  const listing = deferred();
+  const device = {};
+  const cloud = { flushAuth: async () => { await pending.promise; stored.set("tonies.auth.account", { refreshToken: "rotated-old" }); } };
+  app.clients.set("account", cloud);
+  app.accounts = new Map([["account", { cloud, devices: new Set([device]), realtime: { disconnect: async () => {} } }]]);
+  app.homey = { settings: { set: (key, value) => stored.set(key, value) } };
+  app.sdk = async () => ({ isToniebox2: value => value.product === "tb2", TonieCloudClient: class {
+    async login() { this.auth = { refreshToken: "repaired" }; }
+    async request() { return { uuid: "account" }; }
+    async listTonieboxes() { listing.resolve(); return [box]; }
+  } });
+  const released = app.releaseAccount("account", device);
+  const repaired = app.signIn("user", "password");
+  await listing.promise;
+  assert.equal(stored.size, 0);
+  pending.resolve();
+  await released;
+  await repaired;
+  assert.equal(stored.get("tonies.auth.account").refreshToken, "repaired");
+  assert.equal(app.clients.size, 0);
+  assert.equal(app.closing.size, 0);
 });
 
 test("night-mode toggle and Flow controls send native timer commands and reject bad values", async () => {

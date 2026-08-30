@@ -6,6 +6,7 @@ const { actions, conditions } = require("./lib/definitions");
 
 class ToniesApp extends Homey.App {
   clients = new Map();
+  closing = new Map();
 
   async onInit() {
     this.accounts = new Map();
@@ -33,6 +34,7 @@ class ToniesApp extends Homey.App {
     assert(accountId, "The Tonies account has no identity");
     const boxes = (await cloud.listTonieboxes()).filter(isToniebox2);
     assert(boxes.length, "No Toniebox 2 devices were found; original Tonieboxes and Toniebox Lite are not supported");
+    if (this.closing.has(accountId)) await this.closing.get(accountId);
     const existing = this.clients.get(accountId);
     if (existing) await existing.setAuth(cloud.auth);
     else this.homey.settings.set(`tonies.auth.${accountId}`, cloud.auth);
@@ -40,6 +42,7 @@ class ToniesApp extends Homey.App {
   }
 
   async getAccount(accountId, device) {
+    if (this.closing.has(accountId)) await this.closing.get(accountId);
     if (this.accounts.has(accountId)) {
       const account = this.accounts.get(accountId);
       if (device) account.devices.add(device);
@@ -82,8 +85,7 @@ class ToniesApp extends Homey.App {
       return account;
     } finally {
       if (!connected) {
-        if (this.clients.get(accountId) === cloud) this.clients.delete(accountId);
-        await realtime.disconnect();
+        await this.closeAccount(accountId, account);
       }
     }
   }
@@ -93,9 +95,24 @@ class ToniesApp extends Homey.App {
     if (!account?.devices.delete(device)) return;
     if (account.devices.size) return;
     this.accounts.delete(accountId);
-    if (this.clients.get(accountId) === account.cloud) this.clients.delete(accountId);
-    if (deleted) this.homey.settings.unset(`tonies.auth.${accountId}`);
-    await account.realtime.disconnect();
+    await this.closeAccount(accountId, account, deleted);
+  }
+
+  async closeAccount(accountId, account, deleted = false) {
+    const closing = (async () => {
+      try {
+        await account.realtime.disconnect();
+      } finally {
+        try {
+          await account.cloud.flushAuth();
+        } finally {
+          if (this.clients.get(accountId) === account.cloud) this.clients.delete(accountId);
+          if (deleted) this.homey.settings.unset(`tonies.auth.${accountId}`);
+        }
+      }
+    })().finally(() => this.closing.delete(accountId));
+    this.closing.set(accountId, closing);
+    await closing;
   }
 }
 
