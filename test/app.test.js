@@ -287,12 +287,63 @@ test("night-mode toggle and Flow controls send native timer commands and reject 
   ]);
   assert.equal(values.get("night_mode"), undefined);
   assert(confirmations.every(item => item.boxId === "TB2" && item.topic === "app-reply/bedtime-state"));
-  assert.equal(confirmations[0].predicate({ bedtime: { stl: { state: "on" } } }), true);
+  assert.equal(confirmations[0].predicate({ bedtime: { stl: { state: "on", duration: 1800 } } }), true);
+  assert.equal(confirmations[0].predicate({ bedtime: { stl: { state: "on", duration: 300 } } }), false);
+  assert.equal(confirmations[0].predicate({ bedtime: { stl: { state: "on" } } }), false);
+  assert.equal(confirmations[2].predicate({ bedtime: { stl: { state: "on", duration: 2700 } } }), true);
   assert.equal(confirmations[1].predicate({ bedtime: { stl: { state: "on" } } }), false);
   assert.equal(confirmations[1].predicate({ bedtime: { stl: { state: "off" } } }), true);
   assert.throws(() => device.nightModeOn({ minutes: 0 }));
   assert.throws(() => device.nightModeOn({ minutes: NaN }));
   await device.onUninit();
+});
+
+test("bundled SDK confirms Homey night duration and cancels on broker loss", async context => {
+  const { device, account, values, errors } = await fixture({ initialize: false });
+  const { TonieCloudClient, ToniesRealtime } = require("../lib/tonies-sdk");
+  const cloud = new TonieCloudClient({
+    auth: { accessToken: "test-token", expiresAt: Date.now() + 3600000 },
+    fetch: async () => Response.json({ uuid: "test-account" })
+  });
+  const socket = new EventEmitter();
+  socket.connected = true;
+  socket.published = [];
+  socket.subscribeAsync = async () => {};
+  socket.publishAsync = async (topic, payload) => { socket.published.push({ topic, payload: JSON.parse(payload) }); };
+  socket.getLastMessageId = () => socket.published.length;
+  socket.removeOutgoingMessage = () => {};
+  socket.endAsync = async () => {};
+  const realtime = new ToniesRealtime(cloud, { connect: async (url, options) => { socket.options = options; return socket; } });
+  realtime.on("error", error => errors.push(error));
+  account.realtime = realtime;
+  context.after(() => device.onUninit());
+  context.after(() => realtime.disconnect());
+  await realtime.connect([{ ...box, macAddress: "aabbccddeeff" }]);
+  const send = (topic, payload, retain = false) => socket.emit("message", `external/toniebox/AABBCCDDEEFF/${topic}`, Buffer.from(JSON.stringify(payload)), { retain });
+  send("online-state", { onlineState: "connected" }, true);
+  await device.onInit();
+  let confirmed = false;
+  const starting = device.nightModeOn({ minutes: 45 }).then(result => { confirmed = true; return result; });
+  const settled = Promise.allSettled([starting]);
+  context.after(() => settled);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(socket.published[0], { topic: "external/toniebox/AABBCCDDEEFF/app-control/stl", payload: { state: "on", duration: 2700 } });
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 2700 } }, true);
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 300 } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(confirmed, false);
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 2700 } });
+  assert.equal((await starting).deviceConfirmed, true);
+  await device.pending;
+  assert.equal(values.get("night_mode"), true);
+  const stopped = assert.rejects(device.nightModeOff(), /broker disconnected/);
+  await new Promise(resolve => setImmediate(resolve));
+  socket.connected = false;
+  socket.emit("close");
+  await stopped;
+  await device.pending;
+  assert.equal(values.get("night_mode"), null);
+  assert.deepEqual(errors, []);
 });
 
 test("volume and chapters convert Homey units without confusing limits with playback", async () => {

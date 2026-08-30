@@ -260,7 +260,7 @@ class TonieboxDevice extends Homey.Device {
 
   nightMode(seconds) {
     const state = seconds > 0 ? "on" : "off";
-    return this.account.realtime.withConfirmation(this.box.id, "app-reply/bedtime-state", reply => reply.bedtime?.stl?.state === state,
+    return this.account.realtime.withConfirmation(this.box.id, "app-reply/bedtime-state", reply => reply.bedtime?.stl?.state === state && (!seconds || reply.bedtime.stl.duration === seconds),
       () => this.account.realtime.sleepTimer(this.box.id, seconds));
   }
 

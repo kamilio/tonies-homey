@@ -8,7 +8,7 @@ Use the **Night mode** tile or the **Start night mode for … minutes** Flow act
 
 Stopping night mode cancels the sleep-light timer, not scheduled sunrise alarms or every possible bedtime routine. The box must be awake and online. A sleeping box cannot be woken via the cloud; squeeze an ear to wake it. There is no invented remote-wake action.
 
-Night-mode actions require a fresh, non-retained bedtime reply, even when the cached timer state already matches. Listening starts before publishing, so a reply arriving before the broker acknowledgment is not missed; unrelated telemetry cannot falsely confirm a timer command.
+Night-mode actions require a fresh, non-retained bedtime reply with the requested state and duration, even when the cached timer state already matches. Listening starts before publishing, so a reply arriving before the broker acknowledgment is not missed; unrelated telemetry cannot falsely confirm a timer command. A lost broker connection cancels pending confirmation, and overlapping night-mode actions are rejected rather than attributing one uncorrelated reply to multiple commands.
 
 ## Playback and automations
 
