@@ -48,7 +48,7 @@ async function fixture(options = {}) {
     setTonieboxSettings: async (...args) => { controls.push({ method: "settings", args }); }
   } };
   const device = new Device();
-  const sdk = await import("@kamils-jamco/tonies-sdk/realtime");
+  const sdk = require("../lib/tonies-sdk");
   device.homey = {
     app: { getAccount: async () => account, sdk: async () => sdk, releaseAccount: async () => { account.devices.delete(device); } },
     setInterval: callback => { timers.add(callback); return callback; },
@@ -84,6 +84,16 @@ test("every advertised action maps to an implemented device method", () => {
   for (const action of definitions.actions) assert.equal(typeof Device.prototype[action.method], "function", action.id);
   for (const group of [definitions.actions, definitions.triggers, definitions.conditions]) assert.equal(new Set(group.map(card => card.id)).size, group.length);
   assert(definitions.deviceCapabilities.includes("night_mode"));
+});
+
+test("app reuses its bundled cloud-only SDK without loading desktop modules", async () => {
+  const app = new App();
+  const sdk = await app.sdk();
+  assert.equal(await app.sdk(), sdk);
+  assert.deepEqual(Object.keys(sdk).sort(), ["TonieCloudClient", "ToniesRealtime", "isPlaying", "isToniebox2"]);
+  assert.equal(typeof sdk.TonieCloudClient.prototype.login, "function");
+  assert.equal(typeof sdk.ToniesRealtime.prototype.withConfirmation, "function");
+  assert(!Object.keys(require.cache).some(path => path.includes("classic-level")));
 });
 
 test("app registers every action and condition and dispatches to the selected device", async () => {
@@ -218,7 +228,7 @@ test("sign-in filters original boxes and other TNG products before pairing", asy
   const stored = new Map();
   app.accounts = new Map();
   app.homey = { settings: { set: (key, value) => stored.set(key, value) } };
-  const { isToniebox2 } = await import("@kamils-jamco/tonies-sdk/cloud");
+  const { isToniebox2 } = require("../lib/tonies-sdk");
   app.sdk = async () => ({ isToniebox2, TonieCloudClient: class {
     auth = { accessToken: "access", refreshToken: "refresh" };
     async login() {}

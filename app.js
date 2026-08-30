@@ -21,8 +21,7 @@ class ToniesApp extends Homey.App {
   }
 
   async sdk() {
-    const [cloud, realtime] = await Promise.all([import("@kamils-jamco/tonies-sdk/cloud"), import("@kamils-jamco/tonies-sdk/realtime")]);
-    return { ...cloud, ...realtime };
+    return require("./lib/tonies-sdk");
   }
 
   async signIn(email, password) {

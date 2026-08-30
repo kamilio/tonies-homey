@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { Resvg } from "@resvg/resvg-js";
+import { build as bundle } from "esbuild";
 import definitions from "../lib/definitions.js";
 
 export async function build() {
@@ -11,6 +12,29 @@ export async function build() {
   const vendor = JSON.parse(await readFile(join(root, "vendor/sdk.json"), "utf8"));
   const archive = await readFile(join(root, "vendor", vendor.archive));
   assert.equal(`sha512-${createHash("sha512").update(archive).digest("base64")}`, vendor.integrity, "Vendored SDK differs from the pinned source revision");
+  const runtime = await bundle({
+    absWorkingDir: root,
+    stdin: {
+      contents: 'export { TonieCloudClient, isToniebox2 } from "@kamils-jamco/tonies-sdk/cloud"; export { ToniesRealtime, isPlaying } from "@kamils-jamco/tonies-sdk/realtime";',
+      resolveDir: root,
+      sourcefile: "tonies-sdk-entry.js"
+    },
+    bundle: true,
+    platform: "node",
+    target: "node22",
+    format: "cjs",
+    external: ["mqtt"],
+    legalComments: "none",
+    minifyWhitespace: true,
+    metafile: true,
+    write: false
+  });
+  assert.deepEqual(Object.keys(runtime.metafile.inputs).sort(), [
+    "node_modules/@kamils-jamco/tonies-sdk/dist/cloud.js",
+    "node_modules/@kamils-jamco/tonies-sdk/dist/realtime.js",
+    "tonies-sdk-entry.js"
+  ], "Homey must bundle only the SDK cloud and realtime modules");
+  await writeFile(join(root, "lib/tonies-sdk.js"), runtime.outputFiles[0].contents);
   const { actions, triggers, conditions, capabilities, deviceCapabilities, flowCard } = definitions;
   const login = { id: "login_credentials", template: "login_credentials" };
   const images = { small: "/assets/images/small.png", large: "/assets/images/large.png", xlarge: "/assets/images/xlarge.png" };
