@@ -24,6 +24,7 @@ class TonieboxDevice extends Homey.Device {
     this.lifecycle = {};
     this.controlController = new AbortController();
     this.controls = new Set();
+    this.controlQueues = new Map();
     this.online = undefined;
     this.metadataCache = new Map();
     this.metadataTarget = undefined;
@@ -257,12 +258,33 @@ class TonieboxDevice extends Homey.Device {
     return pending;
   }
 
+  queueControl(channel, operation, timeoutMs = 10000) {
+    const queues = this.controlQueues;
+    const previous = queues?.get(channel);
+    const pending = this.control(() => {
+      const deadline = new AbortController();
+      const expiresAt = Date.now() + timeoutMs;
+      const timer = setTimeout(() => deadline.abort(), timeoutMs);
+      return this.account.realtime.withCancellation(deadline.signal, () => this.account.realtime.withConnection(async signal => {
+        await previous;
+        if (Date.now() >= expiresAt) deadline.abort();
+        signal.throwIfAborted();
+        return operation(signal);
+      })).finally(() => clearTimeout(timer));
+    });
+    const completed = Promise.allSettled([pending]).then(() => {
+      if (queues.get(channel) === completed) queues.delete(channel);
+    });
+    queues.set(channel, completed);
+    return pending;
+  }
+
   play() { return this.control(() => this.account.realtime.play(this.box.id)); }
   pause() { return this.control(() => this.account.realtime.pause(this.box.id)); }
   next() { return this.control(() => this.account.realtime.skip(this.box.id, 1)); }
   previous() { return this.control(() => this.account.realtime.skip(this.box.id, -1)); }
-  volumeUp() { return this.control(() => this.account.realtime.changeVolume(this.box.id, 1)); }
-  volumeDown() { return this.control(() => this.account.realtime.changeVolume(this.box.id, -1)); }
+  volumeUp() { return this.volumeControl(1, true); }
+  volumeDown() { return this.volumeControl(-1, true); }
   sleepNow() { return this.control(() => this.account.realtime.sleep(this.box.id)); }
   nightModeOff() { return this.nightMode(0); }
 
@@ -279,7 +301,22 @@ class TonieboxDevice extends Homey.Device {
 
   setVolume({ percent }) {
     assert(Number.isFinite(percent) && percent >= 0 && percent <= 100, "Volume must be 0–100%");
-    return this.control(() => this.account.realtime.setVolume(this.box.id, Math.round(percent / 100 * 13)));
+    return this.volumeControl(Math.round(percent / 100 * 13));
+  }
+
+  volumeControl(value, relative = false) {
+    assert((this.controls?.size ?? 0) < 16, "Volume control queue is full (16 pending controls)");
+    return this.queueControl("volume", async signal => {
+      const realtime = this.account.realtime;
+      const state = await realtime.waitForState(this.box.id, state => state.onlineState !== undefined && (state.onlineState !== "connected" || !relative || Number.isInteger(state.volume?.level)), 10000, { signal });
+      signal.throwIfAborted();
+      const current = realtime.states.get(this.box.id) ?? state;
+      assert.equal(current.onlineState, "connected", "Toniebox is offline; cloud wake is not supported");
+      if (relative) assert(Number.isInteger(current.volume?.level) && current.volume.level >= 0 && current.volume.level <= 13, "Toniebox has no valid volume telemetry");
+      const level = relative ? Math.max(0, Math.min(13, current.volume.level + value)) : value;
+      if (current.volume?.level === level) return { unchanged: true, deviceConfirmed: false };
+      return realtime.withConfirmation(this.box.id, "volume/state", reply => reply.volume?.level === level, () => realtime.setVolume(this.box.id, level));
+    });
   }
 
   seek({ chapter, seconds = 0 }) {
@@ -327,7 +364,7 @@ class TonieboxDevice extends Homey.Device {
     this.tasks?.removeAllListeners("countdown");
     if (this.stateListener) this.account?.realtime.off("state", this.stateListener);
     if (this.metadataListener) this.account?.realtime.off("state", this.metadataListener);
-    const pending = [this.initializing, this.pending, this.metadataPending, this.refreshing, this.countdownPending, Promise.allSettled(this.controls ?? [])];
+    const pending = [this.initializing, this.pending, this.metadataPending, this.refreshing, this.countdownPending, Promise.allSettled(this.controls ?? []), Promise.allSettled(this.controlQueues?.values() ?? [])];
     const drained = Promise.allSettled(pending);
     try {
       await Promise.all(pending);

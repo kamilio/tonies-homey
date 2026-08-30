@@ -13,7 +13,7 @@ function load(file) {
   const path = join(__dirname, "..", file);
   const module = { exports: {} };
   const homey = { App: class {}, Driver: class {}, Device: class {} };
-  vm.runInNewContext(readFileSync(path, "utf8"), { module, require: name => name === "homey" ? homey : createRequire(path)(name), console, setTimeout, AbortController }, { filename: path });
+  vm.runInNewContext(readFileSync(path, "utf8"), { module, require: name => name === "homey" ? homey : createRequire(path)(name), console, setTimeout, clearTimeout, AbortController }, { filename: path });
   return module.exports;
 }
 
@@ -38,6 +38,12 @@ async function fixture(options = {}) {
   realtime.on("error", error => errors.push(error));
   realtime.states = new Map();
   realtime.withCancellation = async (signal, operation) => { signal.throwIfAborted(); return operation(signal); };
+  realtime.withConnection = async operation => operation(new AbortController().signal);
+  realtime.waitForState = async (boxId, predicate) => {
+    const state = realtime.states.get(boxId) ?? { onlineState: "connected", volume: { level: 0 } };
+    assert(predicate(state));
+    return state;
+  };
   realtime.withConfirmation = async (boxId, topic, predicate, operation) => {
     confirmations.push({ boxId, topic, predicate });
     return operation();
@@ -79,6 +85,34 @@ async function fixture(options = {}) {
     await device.pending;
   };
   return { device, account, values, listeners, triggers, controls, confirmations, timers, send, emit, errors };
+}
+
+async function realtimeFixture(context) {
+  const setup = await fixture({ initialize: false });
+  const { device, account, errors } = setup;
+  const { TonieCloudClient, ToniesRealtime } = require("../lib/tonies-sdk");
+  const cloud = new TonieCloudClient({
+    auth: { accessToken: "test-token", expiresAt: Date.now() + 3600000 },
+    fetch: async () => Response.json({ uuid: "test-account" })
+  });
+  const socket = new EventEmitter();
+  socket.connected = true;
+  socket.published = [];
+  socket.subscribeAsync = async () => {};
+  socket.publishAsync = async (topic, payload) => { socket.published.push({ topic, payload: JSON.parse(payload) }); };
+  socket.getLastMessageId = () => socket.published.length;
+  socket.removeOutgoingMessage = () => {};
+  socket.endAsync = async () => {};
+  const realtime = new ToniesRealtime(cloud, { connect: async (url, options) => { socket.options = options; return socket; } });
+  realtime.on("error", error => errors.push(error));
+  account.realtime = realtime;
+  context.after(() => device.onUninit());
+  context.after(() => realtime.disconnect());
+  await realtime.connect([{ ...box, macAddress: "aabbccddeeff" }]);
+  const send = (topic, payload, retain = false) => socket.emit("message", `external/toniebox/AABBCCDDEEFF/${topic}`, Buffer.from(JSON.stringify(payload)), { retain });
+  send("online-state", { onlineState: "connected" }, true);
+  await device.onInit();
+  return { ...setup, realtime, socket, send };
 }
 
 test("every advertised action maps to an implemented device method", () => {
@@ -487,29 +521,7 @@ test("shutdown drains an already-issued settings write and rejects later writes"
 });
 
 test("bundled SDK confirms Homey night duration and cancels interrupted or timed-out controls", async context => {
-  const { device, account, values, errors } = await fixture({ initialize: false });
-  const { TonieCloudClient, ToniesRealtime } = require("../lib/tonies-sdk");
-  const cloud = new TonieCloudClient({
-    auth: { accessToken: "test-token", expiresAt: Date.now() + 3600000 },
-    fetch: async () => Response.json({ uuid: "test-account" })
-  });
-  const socket = new EventEmitter();
-  socket.connected = true;
-  socket.published = [];
-  socket.subscribeAsync = async () => {};
-  socket.publishAsync = async (topic, payload) => { socket.published.push({ topic, payload: JSON.parse(payload) }); };
-  socket.getLastMessageId = () => socket.published.length;
-  socket.removeOutgoingMessage = () => {};
-  socket.endAsync = async () => {};
-  const realtime = new ToniesRealtime(cloud, { connect: async (url, options) => { socket.options = options; return socket; } });
-  realtime.on("error", error => errors.push(error));
-  account.realtime = realtime;
-  context.after(() => device.onUninit());
-  context.after(() => realtime.disconnect());
-  await realtime.connect([{ ...box, macAddress: "aabbccddeeff" }]);
-  const send = (topic, payload, retain = false) => socket.emit("message", `external/toniebox/AABBCCDDEEFF/${topic}`, Buffer.from(JSON.stringify(payload)), { retain });
-  send("online-state", { onlineState: "connected" }, true);
-  await device.onInit();
+  const { device, realtime, socket, send, values, errors } = await realtimeFixture(context);
   assert.equal(device.getAvailable(), true);
   let confirmed = false;
   const starting = device.nightModeOn({ minutes: 45 }).then(result => { confirmed = true; return result; });
@@ -556,6 +568,164 @@ test("bundled SDK confirms Homey night duration and cancels interrupted or timed
   await rejected;
   assert((await realtime.pause(box.id)).acknowledged);
   assert.deepEqual(errors, []);
+});
+
+test("rapid volume presses wait for confirmed telemetry instead of losing increments", async context => {
+  const { device, socket, send, values } = await realtimeFixture(context);
+  send("volume/state", { level: 5 }, true);
+  const first = device.volumeUp();
+  const second = device.volumeUp();
+  const settled = Promise.allSettled([first, second]);
+  context.after(() => settled);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(socket.published.map(command => command.payload.level), [6]);
+  send("volume/state", { level: 6 }, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(socket.published.length, 1);
+  send("volume/state", { level: 6 });
+  assert.equal((await first).deviceConfirmed, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(socket.published.map(command => command.payload.level), [6, 7]);
+  send("volume/state", { level: 7 });
+  assert.equal((await second).deviceConfirmed, true);
+  await device.pending;
+  assert.equal(values.get("volume_set"), 7 / 13);
+  assert.equal(device.controls.size, 0);
+});
+
+test("absolute and relative volume share one queue and bounded levels are no-ops", async context => {
+  const { device, socket, send } = await realtimeFixture(context);
+  send("volume/state", { level: 5 }, true);
+  const absolute = device.setVolume({ percent: 50 });
+  const relative = device.volumeUp();
+  const settled = Promise.allSettled([absolute, relative]);
+  context.after(() => settled);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(socket.published.map(command => command.payload.level), [7]);
+  send("volume/state", { level: 7 });
+  await absolute;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(socket.published.map(command => command.payload.level), [7, 8]);
+  send("volume/state", { level: 8 });
+  await relative;
+  send("volume/state", { level: 13 }, true);
+  assert((await device.volumeUp()).unchanged);
+  assert((await device.setVolume({ percent: 100 })).unchanged);
+  send("volume/state", { level: 0 }, true);
+  assert((await device.volumeDown()).unchanged);
+  assert.equal(socket.published.length, 2);
+  await Promise.all(device.controlQueues.values());
+  assert.equal(device.controlQueues.size, 0);
+});
+
+test("broker loss cancels a bounded volume queue without replaying it after reconnect", async context => {
+  const { device, socket, send } = await realtimeFixture(context);
+  send("volume/state", { level: 5 }, true);
+  const pending = Promise.allSettled(Array.from({ length: 16 }, () => device.volumeUp()));
+  assert.throws(() => device.volumeUp(), /queue is full/);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(socket.published.length, 1);
+  socket.connected = false;
+  socket.emit("close");
+  socket.connected = true;
+  socket.emit("connect");
+  send("online-state", { onlineState: "connected" }, true);
+  send("volume/state", { level: 5 }, true);
+  assert((await pending).every(result => result.status === "rejected" && /broker disconnected/.test(result.reason.message)));
+  await Promise.all(device.controlQueues.values());
+  assert.equal(socket.published.length, 1);
+  assert.equal(device.controls.size, 0);
+  assert.equal(device.controlQueues.size, 0);
+  const next = device.volumeUp();
+  await new Promise(resolve => setImmediate(resolve));
+  send("volume/state", { level: 6 });
+  assert((await next).deviceConfirmed);
+});
+
+test("a volume confirmation timeout does not poison the next queued request", async context => {
+  const { device, realtime, socket, send } = await realtimeFixture(context);
+  send("volume/state", { level: 5 }, true);
+  const confirm = realtime.withConfirmation.bind(realtime);
+  let attempts = 0;
+  realtime.withConfirmation = (...args) => confirm(...args, attempts++ ? 1000 : 5);
+  const rejected = assert.rejects(device.volumeUp(), { name: "AbortError" });
+  const next = device.setVolume({ percent: 100 });
+  const settled = Promise.allSettled([next]);
+  context.after(() => settled);
+  await rejected;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(socket.published.map(command => command.payload.level), [6, 13]);
+  send("volume/state", { level: 13 });
+  assert((await next).deviceConfirmed);
+});
+
+test("night mode remains responsive while queued volume work is cancelled on shutdown", async context => {
+  const { device, socket, send } = await realtimeFixture(context);
+  const pending = Promise.allSettled(Array.from({ length: 16 }, () => device.volumeUp()));
+  const startingNight = device.nightModeOn({ minutes: 30 });
+  await new Promise(resolve => setImmediate(resolve));
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 1800 } });
+  assert((await startingNight).deviceConfirmed);
+  await device.onUninit();
+  assert((await pending).every(result => result.status === "rejected" && result.reason.name === "AbortError"));
+  assert.equal(device.controlQueues.size, 0);
+  assert.equal(socket.published.length, 1);
+  await device.onInit();
+  send("volume/state", { level: 5 }, true);
+  const volume = device.volumeUp();
+  const cancelled = assert.rejects(volume, { name: "AbortError" });
+  const night = device.nightModeOn({ minutes: 30 });
+  await new Promise(resolve => setImmediate(resolve));
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 1800 } });
+  assert((await night).deviceConfirmed);
+  await device.onUninit();
+  await cancelled;
+  send("volume/state", { level: 6 });
+  assert.equal(device.controls.size, 0);
+  assert.equal(device.controlQueues.size, 0);
+});
+
+test("queued controls expire from enqueue time and never execute after their deadline", async context => {
+  const { device } = await realtimeFixture(context);
+  const blocked = deferred();
+  const first = device.queueControl("volume", () => blocked.promise, 1000);
+  let invoked = false;
+  const expired = device.queueControl("volume", async () => { invoked = true; }, 5);
+  const rejected = assert.rejects(expired, { name: "AbortError" });
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15);
+  blocked.resolve();
+  await first;
+  await rejected;
+  assert.equal(invoked, false);
+  await Promise.all(device.controlQueues.values());
+  assert.equal(device.controlQueues.size, 0);
+});
+
+test("10000 confirmed volume changes release Homey queues and retained heap", async context => {
+  const { device, realtime, socket, send } = await realtimeFixture(context);
+  let messageId = 0;
+  socket.getLastMessageId = () => ++messageId;
+  socket.publishAsync = async (topic, payload) => send("volume/state", JSON.parse(payload));
+  send("volume/state", { level: 5 }, true);
+  for (let index = 0; index < 20; index++) await (index % 2 ? device.volumeDown() : device.volumeUp());
+  await device.pending;
+  global.gc?.();
+  const baseline = process.memoryUsage().heapUsed;
+  const started = performance.now();
+  for (let index = 0; index < 10000; index++) await (index % 2 ? device.volumeDown() : device.volumeUp());
+  await device.pending;
+  await Promise.all(device.controlQueues.values());
+  await new Promise(resolve => setImmediate(resolve));
+  global.gc?.();
+  await new Promise(resolve => setImmediate(resolve));
+  global.gc?.();
+  const retained = process.memoryUsage().heapUsed - baseline;
+  assert.equal(device.controls.size, 0);
+  assert.equal(device.controlQueues.size, 0);
+  assert.equal(realtime.listenerCount("state"), 2);
+  assert.equal(realtime.listenerCount("error"), 1);
+  if (global.gc) assert(retained < 2 * 1024 * 1024, `Homey volume controls retained ${retained} heap bytes`);
+  context.diagnostic(`10000 confirmed volume controls: ${(performance.now() - started).toFixed(1)} ms; retained heap delta ${retained} bytes${global.gc ? " after GC" : " (GC not forced)"}`);
 });
 
 test("volume and chapters convert Homey units without confusing limits with playback", async () => {
