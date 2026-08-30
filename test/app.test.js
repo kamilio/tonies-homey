@@ -655,6 +655,63 @@ test("bundled SDK confirms Homey night duration and cancels interrupted or timed
   assert.deepEqual(errors, []);
 });
 
+test("rapid night-mode toggles serialize fresh confirmations independently of volume", async context => {
+  const { device, socket, send } = await realtimeFixture(context);
+  const volume = device.volumeUp();
+  const volumeCancelled = assert.rejects(volume, { name: "AbortError" });
+  const starting = device.nightModeOn({ minutes: 30 });
+  const stopping = device.nightModeOff();
+  const settled = Promise.allSettled([starting, stopping]);
+  context.after(() => settled);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(socket.published.map(command => command.payload.state), ["on"]);
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 1800 } });
+  assert((await starting).deviceConfirmed);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(socket.published.map(command => command.payload.state), ["on", "off"]);
+  send("app-reply/bedtime-state", { stl: { state: "off" } });
+  assert((await stopping).deviceConfirmed);
+  const unchanged = await device.nightModeOff();
+  assert.equal(unchanged.unchanged, true);
+  assert.equal(unchanged.deviceConfirmed, false);
+  assert.equal(socket.published.length, 2);
+  await device.onUninit();
+  await volumeCancelled;
+});
+
+test("sleep-now shares the night queue and confirms its timer before sending sleep", async context => {
+  const { device, socket, send } = await realtimeFixture(context);
+  const starting = device.nightModeOn({ minutes: 30 });
+  const sleeping = device.sleepNow();
+  const settled = Promise.allSettled([starting, sleeping]);
+  context.after(() => settled);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(socket.published.map(command => command.payload), [{ state: "on", duration: 1800 }]);
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 1800 } });
+  assert((await starting).deviceConfirmed);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(socket.published.map(command => command.payload), [{ state: "on", duration: 1800 }, { state: "on", duration: 300 }]);
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 300 } }, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(socket.published.length, 2);
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 300 } });
+  assert.equal((await sleeping).acknowledged, true);
+  assert.equal(socket.published[2].topic, "external/toniebox/AABBCCDDEEFF/app-control/sleep");
+  assert.deepEqual(socket.published[2].payload, {});
+});
+
+test("a sleep-now timer confirmation cannot publish sleep after a wake-cycle boundary", async context => {
+  const { device, socket, send } = await realtimeFixture(context);
+  const rejected = assert.rejects(device.sleepNow(), { name: "AbortError" });
+  await new Promise(resolve => setImmediate(resolve));
+  send("app-reply/bedtime-state", { stl: { state: "on", duration: 300 } });
+  send("online-state", { onlineState: "offline" });
+  send("online-state", { onlineState: "connected" });
+  await rejected;
+  assert.equal(socket.published.length, 1);
+  assert.equal(socket.published[0].topic, "external/toniebox/AABBCCDDEEFF/app-control/stl");
+});
+
 test("rapid volume presses wait for confirmed telemetry instead of losing increments", async context => {
   const { device, socket, send, values } = await realtimeFixture(context);
   send("volume/state", { level: 5 }, true);
@@ -973,7 +1030,7 @@ test("queued controls expire from enqueue time and never execute after their dea
   assert.equal(device.controlQueues.size, 0);
 });
 
-test("10000 confirmed volume and chapter changes release Homey queues and retained heap", async context => {
+test("10000 confirmed volume, chapter, and night changes release Homey queues and retained heap", async context => {
   const { device, realtime, socket, send, errors } = await realtimeFixture(context);
   device.homey.flow.getDeviceTriggerCard = () => ({ trigger: async () => {} });
   let messageId = 0;
@@ -981,18 +1038,20 @@ test("10000 confirmed volume and chapter changes release Homey queues and retain
   socket.publishAsync = async (topic, payload) => {
     const command = JSON.parse(payload);
     if (topic.endsWith("/volume")) send("volume/state", command);
+    else if (topic.endsWith("/stl")) send("app-reply/bedtime-state", { stl: command });
     else send("playback/state", { tonie: "TONIE", chapter: command.chapter, paused: false, chapterPositionMs: 0 });
   };
   send("volume/state", { level: 5 }, true);
   send("playback/state", { tonie: "TONIE", chapter: 0, paused: false, chapterPositionMs: 0 }, true);
-  const operations = ["volumeUp", "next", "volumeDown", "previous"];
-  for (let index = 0; index < 20; index++) await device[operations[index % operations.length]]();
+  send("app-reply/bedtime-state", { stl: { state: "off" } }, true);
+  const operations = [() => device.volumeUp(), () => device.next(), () => device.nightModeOn({ minutes: 30 }), () => device.volumeDown(), () => device.previous(), () => device.nightModeOff()];
+  for (let index = 0; index < 24; index++) await operations[index % operations.length]();
   await device.pending;
   await device.metadataPending;
   global.gc?.();
   const baseline = process.memoryUsage().heapUsed;
   const started = performance.now();
-  for (let index = 0; index < 10000; index++) await device[operations[index % operations.length]]();
+  for (let index = 0; index < 10000; index++) await operations[index % operations.length]();
   await device.pending;
   await device.metadataPending;
   await Promise.all(device.controlQueues.values());

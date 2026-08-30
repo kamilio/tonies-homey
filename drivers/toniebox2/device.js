@@ -309,7 +309,12 @@ class TonieboxDevice extends Homey.Device {
   previous() { return this.changeChapter(-1); }
   volumeUp() { return this.volumeControl(1, true); }
   volumeDown() { return this.volumeControl(-1, true); }
-  sleepNow() { return this.realtimeControl(() => this.account.realtime.sleep(this.box.id)); }
+  sleepNow() {
+    return this.queueControl("night", async () => {
+      await this.confirmNightMode(300);
+      return this.account.realtime.command(this.box.id, "sleep", {});
+    });
+  }
   nightModeOff() { return this.nightMode(0); }
 
   nightModeOn({ minutes }) {
@@ -318,9 +323,16 @@ class TonieboxDevice extends Homey.Device {
   }
 
   nightMode(seconds) {
+    return this.queueControl("night", () => this.confirmNightMode(seconds));
+  }
+
+  confirmNightMode(seconds) {
     const state = seconds > 0 ? "on" : "off";
-    return this.realtimeControl(() => this.account.realtime.withConfirmation(this.box.id, "app-reply/bedtime-state", reply => reply.bedtime?.stl?.state === state && (!seconds || reply.bedtime.stl.duration === seconds),
-      () => this.account.realtime.sleepTimer(this.box.id, seconds)));
+    const realtime = this.account.realtime;
+    const current = realtime.states.get(this.box.id);
+    if (!seconds && current?.onlineState === "connected" && current.bedtime?.stl?.state === "off") return { unchanged: true, deviceConfirmed: false };
+    return realtime.withConfirmation(this.box.id, "app-reply/bedtime-state", reply => reply.bedtime?.stl?.state === state && (!seconds || reply.bedtime.stl.duration === seconds),
+      () => realtime.sleepTimer(this.box.id, seconds));
   }
 
   setVolume({ percent }) {
